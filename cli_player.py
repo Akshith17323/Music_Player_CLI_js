@@ -1,9 +1,7 @@
-# pyrefly: ignore [missing-import]
 import subprocess
 import os
 
-
-SONGS_DIR = "./songs"
+SONGS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "songs")
 
 
 def listSongs(directory_path):
@@ -14,13 +12,19 @@ def listSongs(directory_path):
     return songs
 
 
-
 def playSong(song_name):
     song_path = os.path.join(SONGS_DIR,song_name)
     player = subprocess.run(["afplay",song_path])
     return player
 
 
-listSongs(SONGS_DIR)
+songs = listSongs(SONGS_DIR)
 
-playSong("Chris Brown, Tyga - Girl You Loud.mp3")
+try:
+    user_choice = int(input().strip())
+    print(f"User chose {user_choice}")
+    print(songs)
+    print(f"{SONGS_DIR}/{songs[user_choice]}")
+    playSong(songs[user_choice])
+except (ValueError, IndexError) as e:
+    print(f"Invalid choice: {e}")

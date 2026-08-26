@@ -1,55 +1,89 @@
-const { spawn } = require('child_process')
-const path = require('path')
-const { readdirSync } = require('fs')
+const { readdirSync } = require("fs");
+const { join } = require("path");
+const { spawn } = require("child_process");
+process.stdin.setRawMode(true);
 
-let songs = []
-let userSelectionIndex = 0
-const SONGS_DIR = "./songs"
+let user_input = 0;
+let songs = undefined;
+let player = undefined;
+let song_is_playing = false;
 
-function listSongs(songDirectoryPath) {
-    console.clear()
-    songs = readdirSync(songDirectoryPath).filter((file) => file.endsWith(".mp3"))
-    songs.forEach((song, ind) => {
-        if (ind === userSelectionIndex) {
-            console.log(`> ${song}`)
-        } else {
-            console.log(`  ${song}`)
-        }
+function listSongs(directoryPath) {
+  songs = readdirSync(directoryPath);
+  process.stdout.write("\x1B[2J");
+  process.stdout.write("\x1B[2;1H");
+
+  let menuText = songs
+    .map((ele, ind) => {
+      if (user_input == ind) {
+        return `> ${ele}`;
+      } else {
+        return `  ${ele}`;
+      }
     })
+    .join("\n");
+  process.stdout.write(menuText);
 }
 
-
-function playSong(song_name) {
-    const song_path = path.join(SONGS_DIR, song_name)
-    const player = spawn("afplay", [song_path])
-    console.log(`\nPlaying: ${song_name}`)
-    return player
+function playSongs(directoryPath) {
+  // Using VLC instead of afplay
+  player = spawn("/Applications/VLC.app/Contents/MacOS/VLC", ["--intf", "dummy", "--play-and-exit", directoryPath]);
+  // console.log(player)
 }
 
+listSongs(join("songs"));
 
-listSongs(SONGS_DIR);
-
-// Take User Song Selection
-process.stdin.setRawMode(true)
-process.stdin.on('data', (rawUserInput) => {
-    if (rawUserInput[0] === 0x0d) {
-        console.log(`\nUser selected: ${songs[userSelectionIndex]}`)
-        playSong(songs[userSelectionIndex])
-        return
-    }
-    if (rawUserInput[0] === 0x03) {
-        process.exit(0)
+process.stdin.on("data", (data) => {
+  console.log(data);
+  if (data[0] == 0x0d) {
+    if (!song_is_playing) {
+      playSongs(join("songs", songs[user_input]));
+      song_is_playing = true;
     } else {
-        if (rawUserInput[0] === 0x1b) {
-            if (rawUserInput[1] === 0x5b) {
-                if (rawUserInput[2] === 0x41) { // Up Key
-                    userSelectionIndex = Math.max(0, userSelectionIndex - 1)
-                }
-                if (rawUserInput[2] === 0x42) { // Down Key
-                    userSelectionIndex = Math.min(songs.length - 1, userSelectionIndex + 1)
-                }
-            }
-        }
+      player.kill("SIGKILL");
+      process.exit(0);
+      song_is_playing = false;
     }
-    listSongs(SONGS_DIR)
-})
+    return;
+  }
+  if (data[0] == 3) {
+    process.exit(0);
+    return;
+  }
+  if (data[0] == 0x20) {
+    if (song_is_playing) {
+      player.kill("SIGSTOP");
+      song_is_playing = false;
+    } else {
+      player.kill("SIGCONT");
+      song_is_playing = true;
+    }
+  }
+  if (data[0] == 0x6e) { // Fixed "0x6E" string to number 0x6e for 'n' key
+    if (player) player.kill("SIGTERM");
+    user_input = Math.min(songs.length - 1, user_input + 1);
+    listSongs(join("songs"));
+    playSongs(join("songs", songs[user_input]));
+    song_is_playing = true;
+  }
+  if (data[0] == 0x64) { // Fixed "0x64" string to number 0x64 for 'd' key
+    if (player) player.kill("SIGTERM");
+    user_input = Math.max(0, user_input - 1);
+    listSongs(join("songs"));
+    playSongs(join("songs", songs[user_input]));
+    song_is_playing = true;
+  }
+  if (data[0] == 0x1b && data[1] == 0x5b) {
+    if (data[2] == 0x41) {
+      user_input = Math.max(0, user_input - 1);
+      listSongs(join("songs"));
+    }
+    if (data[2] == 0x42) {
+      user_input = Math.min(songs.length - 1, user_input + 1);
+      listSongs(join("songs"));
+    }
+  }
+});
+
+
+

@@ -27,7 +27,7 @@ function listSongs(directoryPath) {
 
 function playSongs(directoryPath) {
   // Using VLC instead of afplay
-  player = spawn("/Applications/VLC.app/Contents/MacOS/VLC", ["--intf", "dummy", "--play-and-exit", directoryPath]);
+  player = spawn("/Applications/VLC.app/Contents/MacOS/VLC", ["--intf", "rc", directoryPath]);
   // console.log(player)
 }
 

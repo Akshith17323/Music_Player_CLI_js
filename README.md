@@ -83,32 +83,5 @@ State management is super important! Keeping track of things like `song_is_playi
 ### Flow Overview
 The application handles asynchronous terminal input, updates internal JS state, orchestrates VLC playback, tracks time, and continuously renders a unified UI frame to standard output.
 
-```mermaid
-flowchart TD
-    A[User Input via process.stdin] --> B{Key Press}
-    
-    B -->|Up/Down| C[Update user_input index state]
-    B -->|Enter| D{Is playing?}
-    B -->|Spacebar| E[Toggle song_is_playing state]
-    B -->|Ctrl+C| F2[Force Exit]
-    B -->|n/d| C2[Next/Prev Track]
+![CLI Architecture Diagram](./assets/Music_cli_player_Architecture.png)
 
-    C --> G[List Songs / Redraw UI]
-    C2 --> H[Kill old VLC process & Interval]
-    
-    D -->|No| H
-    D -->|Yes| F[Kill player & Exit]
-    
-    H --> I[Fetch totalDuration with afinfo]
-    I --> J[Spawn VLC process with RC interface]
-    J --> K[Start trackingInterval & reset timeElapsed]
-    
-    E --> L[Send SIGSTOP/SIGCONT to VLC]
-    L --> M[Freeze/Unfreeze timeElapsed logic]
-    M --> G
-
-    K -. Every 100ms .-> N[Update timeElapsed]
-    N --> G
-    
-    G --> P[Draw song list & progress bar]
-```

@@ -1,0 +1,61 @@
+# CLI Music Player Development History
+
+This document tracks the sequence of reasonable, valid prompts that led to the development of this CLI music player, ordered by the evolution of the project.
+
+## Phase 1: Core Functionality & Raw Key Input
+1. "Without changing my existing code, append the raw input handling logic to cli_player.js."
+   - *Result*: Integrated `process.stdin.setRawMode(true)` and arrow key navigation listeners into the main application.
+
+2. "Suggest fixes for the issues in listSongs and explain the reason for removing/adding each line of code."
+   - *Result*: Fixed the initial crash caused by `spawn(readdirSync())`, correctly implementing synchronous directory reading.
+
+## Phase 2: Fixing Bugs & Interaction Glitches
+3. "Why does it ask me to select a song again right after I press Enter?"
+   - *Result*: Added a `return` statement after `playSong()` to prevent the menu from re-rendering immediately while a song plays in the background.
+
+4. "Implement listSongs to properly display a cursor (>) next to the currently selected song."
+   - *Result*: Fixed template literal syntax (`> ${song}`) to render the interactive pointer correctly.
+
+5. "Can you run this and tell me why it is throwing 'ReferenceError: fs is not defined'?"
+   - *Result*: Fixed module imports (using `readdirSync` directly instead of referencing `fs.readdirSync`).
+
+6. "Every time I move the cursor, a buffer prints. Should I remove the listSongs call inside the stdin listener?"
+   - *Result*: Removed the stray `console.log(rawUserInput)` that was printing raw buffers. Kept the `listSongs()` call but added `console.clear()` so the menu updates smoothly in-place without scrolling.
+
+7. "Why is there extra space under the list of songs? Also, I need to see in the console what song the user selected and is currently playing."
+   - *Result*: Removed the extra `\n\n` newlines, and updated the logs to explicitly print `User selected: [song name]` and `Playing: [song name]`.
+
+## Phase 3: Project Cleanup & Advanced Features
+8. "Is there any use for the raw_io.js file?"
+   - *Result*: Identified it as an outdated scratchpad script since all raw I/O logic was successfully migrated to `cli_player.js`.
+
+9. "How do they implement VLC playback in this code?"
+   - *Result*: Discussed replacing the macOS-specific `afplay` with a cross-platform VLC playback command.
+
+10. "I do have VLC on my device, let's implement it."
+   - *Result*: Adapted the `spawn` command to utilize VLC for audio playback.
+
+## Phase 4: Prompt Management
+11. "From now on add the pormpts in this chat to the @[/Users/killiakshithkumar/Desktop/Application_Dev_Lec/Music_Player_cli/prompts/history.txt]  for this whle porject and also add only vald pormpts and reasonable ones and copy and add the full pormpts"
+    - *Result*: Agreed to log all future valid and reasonable prompts exactly as provided to history.txt.
+
+12. "@[/Users/killiakshithkumar/Desktop/ApplicationDev_Lec/Music_Player_cli] now refractoring the @[/Users/killiakshithkumar/Desktop/ApplicationDev_Lec/Music_Player_cli/prompts/history.txt]  with adding the new ones in teh previous chats too please"
+    - *Result*: Refactored `history.txt` to include the latest prompt, ensuring recent chat history is accurately captured and maintained in its raw format.
+
+## Phase 5: Review & Understanding (Catch-up)
+*(Note: Some previous prompts during this phase were lost due to authentication errors. The following are reconstructed prompts to help understand key decisions made while absent from lectures.)*
+
+13. "Why did we use `process.stdin.setRawMode(true)` in `cli_player.js` instead of just using standard `readline` or taking input normally? How does raw mode actually work under the hood?"
+    - *Result*: Explored how raw mode allows listening to individual keypresses (like arrows) without requiring the user to press Enter.
+
+14. "I saw we used `readdirSync` to read the list of songs. What is the difference between synchronous (`sync`) and asynchronous methods in Node.js, and why did we choose the synchronous version here?"
+    - *Result*: Clarified that synchronous reads block the event loop, which is acceptable here since we must load the songs before showing the menu.
+
+15. "How does the interactive menu work? Specifically, why do we use `console.clear()` every time a key is pressed, and how does the `> ${song}` template literal create the illusion of a moving cursor?"
+    - *Result*: Discussed terminal UI rendering basics, clearing the screen, and redrawing the state to mimic an interactive application.
+
+16. "Why did we use `spawn` to play songs with VLC or `afplay` instead of installing an npm package to play audio? How does Node.js execute system-level commands like VLC?"
+    - *Result*: Covered Node's `child_process` module and how it can spawn native OS processes to handle tasks like media playback seamlessly.
+
+17. "In Phase 2, we had a bug where the menu would ask to select a song again right after pressing Enter. Why did adding a `return` statement fix this, and how does it relate to the background playback process?"
+    - *Result*: Explained control flow and preventing subsequent code execution when a specific action (like starting playback) has already been triggered.

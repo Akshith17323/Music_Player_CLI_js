@@ -14,8 +14,10 @@ let trackingInterval = undefined;
 let playingIndex = -1;
 
 async function getSongDuration(songFilePath) {
-    return new Promise((resolve, reject) => {
-        const afinfoCP = spawn("afinfo", [songFilePath]);
+    return new Promise((resolve) => {
+        const afinfoCP = spawn("afinfo", [songFilePath], { stdio: ['ignore', 'pipe', 'ignore'] });
+
+        afinfoCP.on('error', () => resolve(0));
 
         let output = "";
         afinfoCP.stdout.on('data', (data) => {
@@ -75,6 +77,11 @@ function listSongs(songDirPath) {
 
     process.stdout.write("\x1B[2;1H");
 
+    if (allSongs.length === 0) {
+        process.stdout.write("\r\x1B[0KNo songs found in the songs folder.\n");
+        return;
+    }
+
     const menuText = allSongs.map((songName, index) => {
         return ("\r\x1B[0K" + (index === cursor ? '> ' : '  ') + songName);
     }).join("\n");
@@ -83,37 +90,93 @@ function listSongs(songDirPath) {
     updateProgress();
 }
 
+function stopPlayback() {
+    const previousProcess = vlcPlayProcess;
+    vlcPlayProcess = undefined;
+    if (trackingInterval !== undefined) clearInterval(trackingInterval);
+    trackingInterval = undefined;
+    isPaused = true;
+    playingIndex = -1;
+    timeElapsed = undefined;
+    totalDuration = undefined;
+
+    if (previousProcess) previousProcess.kill("SIGKILL");
+}
+
+function showPlaybackError(message) {
+    process.stdout.write(`\x1B[${allSongs.length + 2};1H\r\x1B[0JPlayback error: ${message}\n`);
+}
+
 function playSong(targetCursor) {
-    if (vlcPlayProcess !== undefined) {
-        vlcPlayProcess.kill("SIGKILL");
-        vlcPlayProcess = undefined;
-    }
+    if (!Number.isInteger(targetCursor) || targetCursor < 0 || targetCursor >= allSongs.length) return;
+
+    stopPlayback();
 
     isPaused = false;
-    totalDuration = undefined;
+    cursor = targetCursor;
     playingIndex = targetCursor;
-    
+    listSongs(songDir);
+    process.stdout.write(`\x1B[${allSongs.length + 2};1H\r\x1B[0J`);
+
     const songFinalPath = join(songDir, allSongs[targetCursor]);
-    
+
+    // Node owns the playlist. Each VLC instance plays one track, then exits.
+    const currentProcess = spawn("/Applications/VLC.app/Contents/MacOS/VLC", [
+        "--intf", "rc", "--play-and-exit",
+        "--no-loop", "--no-repeat", "--no-random",
+        "--no-play-and-stop", "--no-play-and-pause", "--no-start-paused",
+        "--no-quiet", "--verbose", "0", "--no-color",
+        songFinalPath
+    ], { stdio: ['pipe', 'ignore', 'pipe'] });
+    vlcPlayProcess = currentProcess;
     startElapsedTracking();
-    vlcPlayProcess = spawn("/Applications/VLC.app/Contents/MacOS/VLC", ["--intf", "rc", songFinalPath]);
-    
-    const currentProcess = vlcPlayProcess;
-    
+
+    const handlePlayerError = (error) => {
+        if (vlcPlayProcess !== currentProcess) return;
+        stopPlayback();
+        showPlaybackError(error.message);
+    };
+    currentProcess.on('error', handlePlayerError);
+    currentProcess.stdin.on('error', handlePlayerError);
+
+    let diagnosticTail = "";
+    let playbackFailed = false;
+    currentProcess.stderr.on('data', (data) => {
+        const diagnostics = diagnosticTail + data.toString();
+        // VLC can exit with code 0 even when opening/decoding the input failed.
+        if (/\b(?:input|stream|demux|decoder|audio output) error:/i.test(diagnostics)) {
+            playbackFailed = true;
+        }
+        diagnosticTail = diagnostics.slice(-4096);
+    });
+
     getSongDuration(songFinalPath).then(duration => {
         if (vlcPlayProcess === currentProcess) {
             totalDuration = duration;
         }
     });
-    
-    vlcPlayProcess.on('close', (code) => {
-        // null code means it was killed via signal (e.g. SIGKILL). 0 means it finished playing.
-        if (code === 0) {
-            playingIndex = (playingIndex + 1) % allSongs.length;
-            listSongs(songDir);
-            playSong(playingIndex);
+
+    currentProcess.once('close', (code, signal) => {
+        if (vlcPlayProcess !== currentProcess) return;
+
+        vlcPlayProcess = undefined;
+        stopPlayback();
+
+        if (code === 0 && !signal && !playbackFailed) {
+            playSong((targetCursor + 1) % allSongs.length);
+        } else {
+            const reason = playbackFailed
+                ? `VLC could not play ${allSongs[targetCursor]}`
+                : `VLC stopped ${signal ? `by ${signal}` : `with exit code ${code}`}`;
+            showPlaybackError(reason);
         }
     });
+}
+
+function skipSong(offset) {
+    if (allSongs.length === 0) return;
+    const baseIndex = playingIndex === -1 ? cursor : playingIndex;
+    playSong((baseIndex + offset + allSongs.length) % allSongs.length);
 }
 
 process.stdout.write('\x1b[2J');
@@ -122,6 +185,7 @@ listSongs(songDir);
 if (process.stdin.isTTY) process.stdin.setRawMode(true);
 process.stdin.on('data', (data) => {
     if (data[0] === 0x1b) {
+        if (allSongs.length === 0) return;
         if (data[1] === 0x5b) {
             if (data[2] === 0x41) {
                 // up arrow key
@@ -140,20 +204,13 @@ process.stdin.on('data', (data) => {
 
     // play next 'n' (110)
     if (data[0] === 110) { 
-        cursor = (cursor + 1) % allSongs.length;
-        listSongs(songDir);
-        playSong(cursor);
+        skipSong(1);
         return;
     }
 
     // play previous 'b' (98) or 'd' (100)
     if (data[0] === 98 || data[0] === 100) { 
-        cursor = ((cursor - 1) % allSongs.length); 
-        if (cursor < 0) {
-            cursor += allSongs.length;
-        } 
-        listSongs(songDir);
-        playSong(cursor);
+        skipSong(-1);
         return;
     }
 
@@ -165,14 +222,14 @@ process.stdin.on('data', (data) => {
 
     // ctrl+c
     if (data[0] === 0x03) {
-        if (vlcPlayProcess) vlcPlayProcess.kill("SIGKILL");
+        stopPlayback();
         process.exit(); 
     }
 
     // play/pause 'p' (112) or space (32)
     if (data[0] === 112 || data[0] === 0x20) {
-        isPaused = !isPaused;
-        if (vlcPlayProcess !== undefined) {
+        if (vlcPlayProcess !== undefined && !vlcPlayProcess.stdin.destroyed) {
+            isPaused = !isPaused;
             // using rc interface 'pause' command
             vlcPlayProcess.stdin.write('pause\n');
         }

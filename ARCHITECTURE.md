@@ -1,6 +1,6 @@
 # CLI Music Player Architecture
 
-Verified against the current JavaScript implementation on **2026-11-07**. The [original architecture review](docs/reviews/architecture-review.md) is preserved separately as development history.
+Verified against the current implementations on **2026-11-08**. Earlier architecture reviews are available in Git history.
 
 ## Repository layout
 
@@ -9,20 +9,30 @@ Verified against the current JavaScript implementation on **2026-11-07**. The [o
 | `cli_player.js` | Main interactive player: keyboard input, playlist state, VLC lifecycle, metadata, and terminal rendering. |
 | `cli_player.py` | Earlier `afplay` prototype with arrow selection and Enter-to-play. |
 | `songs/` | Fixed library directory adjacent to the entry points. |
-| `test/cli_player.test.js` | Isolated lifecycle regressions and opt-in native VLC smoke tests. |
-| `README.md` | Setup, controls, test commands, and learning notes. |
+| `README.md` | Setup, controls, and learning notes. |
 | `ARCHITECTURE.md` | Current runtime design and review follow-up. |
-| `docs/reviews/architecture-review.md` | Historical review with its original excerpts and recommendations. |
 | `CLI_Music_Player_Project_Report.pdf` | Historical coursework report. |
 | `assets/Music_cli_player_Architecture.png` | Historical architecture illustration. |
 | `prompts/history.txt` | Development-prompt history. |
 | `.gitignore` | Ignore rules, including the local `BUGS.md` audit. |
 
-`BUGS.md`, when present locally, records the original audit and follow-up status. `.DS_Store` is Finder metadata and has no runtime role; an already tracked copy remains tracked even after adding an ignore rule.
+`BUGS.md`, when present locally, records the original audit and follow-up status.
 
 The main player uses Node's built-in modules. There is no package-install or build step. The root entry points stay directly runnable with `node cli_player.js` and `python3 cli_player.py`.
 
 ## Runtime responsibilities
+
+### Executable setup
+
+Both entry points check for macOS and validate their executables before enabling terminal raw mode. An explicit environment override takes priority and is reported as a setup error if it cannot be executed.
+
+| Tool | Override | Default discovery order |
+| --- | --- | --- |
+| VLC | `VLC_PATH` | `vlc` on `PATH`, `/Applications/VLC.app/Contents/MacOS/VLC`, then the equivalent under `~/Applications`. |
+| `afinfo` | `AFINFO_PATH` | `afinfo` on `PATH`, then `/usr/bin/afinfo`. |
+| `afplay` | `AFPLAY_PATH` | `afplay` on `PATH`, then `/usr/bin/afplay`. |
+
+JavaScript validates executable files with filesystem permission checks; Python uses `shutil.which`. Child processes receive an executable path and an argument array, including when paths contain spaces.
 
 ### Library and selection
 
@@ -35,6 +45,8 @@ The main player uses Node's built-in modules. There is no package-install or bui
 - Empty libraries show a message and disable playback/navigation arithmetic.
 
 There is no command-line library-path argument. Directory contents are cached, and file-type/access validation is still limited.
+
+The Python prototype refreshes its directory listing on input, clamps the selection to the refreshed list, and skips playback requests when the list is empty. This also handles hidden-only libraries and a library becoming empty during use.
 
 ### Playback ownership
 
@@ -69,9 +81,11 @@ The last track wraps to the first; a one-track library repeats that track. Timer
 | VLC | Pipe for RC pause commands. | Ignored. | Continuously consumed; a bounded diagnostic tail detects input/stream/demux/decoder/audio-output errors. |
 | `afinfo` | Ignored. | Collected for duration parsing. | Ignored. |
 
-VLC 3.0.24 can report an unreadable file and still exit with code zero. Recognized media-error diagnostics therefore block advancement, preventing an invalid single-track library from entering a retry loop. The Lua RC interface's normal `Interrupted` shutdown diagnostic is not treated as a media failure. This diagnostic classification is tied to VLC's log format and is covered by the native smoke tests.
+VLC 3.0.24 can report an unreadable file and still exit with code zero. Recognized media-error diagnostics therefore block advancement, preventing an invalid single-track library from entering a retry loop. The Lua RC interface's normal `Interrupted` shutdown diagnostic is not treated as a media failure. This diagnostic classification is tied to VLC's log format and was verified with native playback checks.
 
-VLC spawn and stdin-write errors stop/reset the current player and produce a visible error. A failed `afinfo` spawn resolves the duration lookup to zero; unknown-duration rendering remains a separate limitation.
+VLC spawn, stdin-write, and stderr-read errors stop/reset the current player and produce a visible error. Synchronous spawn/write exceptions are handled as well as asynchronous process/stream errors. An `afinfo` spawn or stdout-read failure rejects the metadata lookup; the owning playback instance is stopped and the dependency error is shown. Superseded metadata errors cannot stop a replacement track.
+
+Python catches `afplay` launch failures, clears the failed playback state, displays an error, and continues accepting input. It retains the existing player reference if stopping that player fails. Executable validation reduces setup errors, while runtime handlers cover removal or permission changes after validation.
 
 ### Metadata, progress, and rendering
 
@@ -85,7 +99,7 @@ The displayed time is an estimate. VLC startup/buffering, wall-clock changes, fa
 
 The JS entry point enables raw mode for TTY stdin and handles incoming data buffers. Space or `p` writes `pause\n` to the active VLC child. Raw Ctrl+C calls `stopPlayback()` and exits.
 
-Input-buffer decoding, external signal/EOF cleanup, and terminal resizing still need dedicated improvements. The Python prototype has its own simpler input loop and does not share the JS playback lifecycle.
+Input-buffer decoding, JS external signal/EOF cleanup, and terminal resizing still need dedicated improvements. The Python prototype has its own simpler input loop, validates that stdin is a terminal, and restores its terminal settings on loop exit. Its playback-child cleanup still needs improvement.
 
 ## Playback flow
 
@@ -115,20 +129,8 @@ flowchart TD
 ## Review follow-up and verification
 
 - **B01:** Fixed by explicit end-of-track process exit and guarded automatic advancement.
-- **Related lifecycle corrections:** Next/previous uses the playing index; old callbacks cannot interrupt replacements; active failures stop timing; child pipes are consumed or ignored; empty JS libraries are guarded.
+- **Related lifecycle corrections:** Next/previous uses the playing index; old callbacks cannot interrupt replacements; active failures stop timing; child pipes are consumed or ignored; both players guard empty libraries and explain dependency failures.
 - **Historical claims corrected:** Enter plays/restarts rather than exits; JS navigation wraps; pause uses RC commands; metadata is asynchronous; elapsed time uses measured deltas; exceeding 100% was already capped.
-- **Historical artifacts:** The archived review, PDF, and original image explain development history. This document describes the current implementation.
+- **Historical artifacts:** Git history, the PDF, and the original image explain development history. This document describes the current implementation.
 
-Run the isolated regression checks with:
-
-```sh
-node --test
-```
-
-Run all checks, including installed VLC on macOS, with:
-
-```sh
-RUN_VLC_SMOKE=1 node --test
-```
-
-The native tests create temporary silent WAV files and use dummy audio/video outputs. They verify **A → B → A** despite conflicting VLC playback preferences, and confirm that an unreadable track stops with an error even when VLC exits successfully. The full suite passed **15 tests** with VLC 3.0.24.
+Development verification on **2026-11-08** passed **14 JavaScript checks** (including native VLC playback) and **8 Python checks** covering dependency validation, runtime failures, and empty/changing libraries. Native checks confirmed **A → B → A** despite conflicting VLC playback preferences, and that an unreadable track stops with an error even when VLC exits successfully.

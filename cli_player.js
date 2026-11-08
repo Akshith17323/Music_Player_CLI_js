@@ -1,5 +1,6 @@
-const { readdirSync } = require("fs");
-const { join } = require("path");
+const { accessSync, constants, readdirSync, statSync } = require("fs");
+const { delimiter, isAbsolute, join, resolve } = require("path");
+const { homedir } = require("os");
 const { spawn } = require("child_process");
 
 const songDir = join(__dirname, 'songs');
@@ -12,12 +13,69 @@ let totalDuration = undefined;
 let timeElapsed = undefined;
 let trackingInterval = undefined;
 let playingIndex = -1;
+let executables = undefined;
+
+function findExecutable(command) {
+    const expanded = command.startsWith('~/') ? join(homedir(), command.slice(2)) : command;
+    const candidates = isAbsolute(expanded) || expanded.includes('/')
+        ? [resolve(expanded)]
+        : (process.env.PATH || '').split(delimiter).map(directory => resolve(directory, expanded));
+
+    for (const candidate of candidates) {
+        try {
+            accessSync(candidate, constants.X_OK);
+            if (statSync(candidate).isFile()) return candidate;
+        } catch {
+            // Try the next candidate when a file is missing or inaccessible.
+        }
+    }
+    return undefined;
+}
+
+function resolveDependency(name, variable, defaults) {
+    const configured = process.env[variable];
+    for (const command of configured ? [configured] : defaults) {
+        const executable = findExecutable(command);
+        if (executable) return executable;
+    }
+    const location = configured ? ` (${configured})` : '';
+    throw new Error(`${name}${location} was not found or is not executable. Set ${variable} to its executable path.`);
+}
+
+function configureExecutables() {
+    if (process.platform !== 'darwin') {
+        throw new Error(`This player requires macOS and afinfo; detected ${process.platform}.`);
+    }
+    return {
+        vlc: resolveDependency('VLC', 'VLC_PATH', [
+            'vlc',
+            '/Applications/VLC.app/Contents/MacOS/VLC',
+            join(homedir(), 'Applications/VLC.app/Contents/MacOS/VLC')
+        ]),
+        afinfo: resolveDependency('afinfo', 'AFINFO_PATH', ['afinfo', '/usr/bin/afinfo'])
+    };
+}
+
+function executableFailure(name, variable, error) {
+    const hint = ['ENOENT', 'EACCES', 'EPERM', 'ENOEXEC'].includes(error.code)
+        ? ` Check ${variable} and executable permissions.`
+        : '';
+    return new Error(`${name}: ${error.message}${hint}`);
+}
 
 async function getSongDuration(songFilePath) {
-    return new Promise((resolve) => {
-        const afinfoCP = spawn("afinfo", [songFilePath], { stdio: ['ignore', 'pipe', 'ignore'] });
+    return new Promise((resolve, reject) => {
+        const fail = error => reject(executableFailure('afinfo', 'AFINFO_PATH', error));
+        let afinfoCP;
+        try {
+            afinfoCP = spawn(executables.afinfo, [songFilePath], { stdio: ['ignore', 'pipe', 'ignore'] });
+        } catch (error) {
+            fail(error);
+            return;
+        }
 
-        afinfoCP.on('error', () => resolve(0));
+        afinfoCP.on('error', fail);
+        afinfoCP.stdout.on('error', fail);
 
         let output = "";
         afinfoCP.stdout.on('data', (data) => {
@@ -121,13 +179,20 @@ function playSong(targetCursor) {
     const songFinalPath = join(songDir, allSongs[targetCursor]);
 
     // Node owns the playlist. Each VLC instance plays one track, then exits.
-    const currentProcess = spawn("/Applications/VLC.app/Contents/MacOS/VLC", [
-        "--intf", "rc", "--play-and-exit",
-        "--no-loop", "--no-repeat", "--no-random",
-        "--no-play-and-stop", "--no-play-and-pause", "--no-start-paused",
-        "--no-quiet", "--verbose", "0", "--no-color",
-        songFinalPath
-    ], { stdio: ['pipe', 'ignore', 'pipe'] });
+    let currentProcess;
+    try {
+        currentProcess = spawn(executables.vlc, [
+            "--intf", "rc", "--play-and-exit",
+            "--no-loop", "--no-repeat", "--no-random",
+            "--no-play-and-stop", "--no-play-and-pause", "--no-start-paused",
+            "--no-quiet", "--verbose", "0", "--no-color",
+            songFinalPath
+        ], { stdio: ['pipe', 'ignore', 'pipe'] });
+    } catch (error) {
+        stopPlayback();
+        showPlaybackError(executableFailure('VLC', 'VLC_PATH', error).message);
+        return;
+    }
     vlcPlayProcess = currentProcess;
     startElapsedTracking();
 
@@ -136,8 +201,9 @@ function playSong(targetCursor) {
         stopPlayback();
         showPlaybackError(error.message);
     };
-    currentProcess.on('error', handlePlayerError);
+    currentProcess.on('error', error => handlePlayerError(executableFailure('VLC', 'VLC_PATH', error)));
     currentProcess.stdin.on('error', handlePlayerError);
+    currentProcess.stderr.on('error', handlePlayerError);
 
     let diagnosticTail = "";
     let playbackFailed = false;
@@ -154,7 +220,7 @@ function playSong(targetCursor) {
         if (vlcPlayProcess === currentProcess) {
             totalDuration = duration;
         }
-    });
+    }).catch(handlePlayerError);
 
     currentProcess.once('close', (code, signal) => {
         if (vlcPlayProcess !== currentProcess) return;
@@ -179,11 +245,7 @@ function skipSong(offset) {
     playSong((baseIndex + offset + allSongs.length) % allSongs.length);
 }
 
-process.stdout.write('\x1b[2J');
-listSongs(songDir);
-
-if (process.stdin.isTTY) process.stdin.setRawMode(true);
-process.stdin.on('data', (data) => {
+function handleInput(data) {
     if (data[0] === 0x1b) {
         if (allSongs.length === 0) return;
         if (data[1] === 0x5b) {
@@ -229,9 +291,32 @@ process.stdin.on('data', (data) => {
     // play/pause 'p' (112) or space (32)
     if (data[0] === 112 || data[0] === 0x20) {
         if (vlcPlayProcess !== undefined && !vlcPlayProcess.stdin.destroyed) {
-            isPaused = !isPaused;
-            // using rc interface 'pause' command
-            vlcPlayProcess.stdin.write('pause\n');
+            const currentProcess = vlcPlayProcess;
+            try {
+                currentProcess.stdin.write('pause\n');
+                if (vlcPlayProcess === currentProcess) isPaused = !isPaused;
+            } catch (error) {
+                if (vlcPlayProcess !== currentProcess) return;
+                stopPlayback();
+                showPlaybackError(`VLC input: ${error.message}`);
+            }
         }
     }
-});
+}
+
+function main() {
+    try {
+        executables = configureExecutables();
+    } catch (error) {
+        process.stderr.write(`Setup error: ${error.message}\n`);
+        process.exitCode = 1;
+        return;
+    }
+
+    process.stdout.write('\x1b[2J');
+    listSongs(songDir);
+    if (process.stdin.isTTY) process.stdin.setRawMode(true);
+    process.stdin.on('data', handleInput);
+}
+
+main();

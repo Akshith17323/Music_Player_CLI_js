@@ -12,7 +12,7 @@ let vlcPlayProcess = undefined;
 let totalDuration = undefined;
 let timeElapsed = undefined;
 let trackingInterval = undefined;
-let playingIndex = -1;
+let playingSong = undefined;
 let executables = undefined;
 
 function findExecutable(command) {
@@ -113,10 +113,10 @@ function startElapsedTracking() {
 }
 
 function updateProgress() {
-    if (timeElapsed !== undefined && totalDuration !== undefined && allSongs !== null && playingIndex !== -1) {
+    if (timeElapsed !== undefined && totalDuration !== undefined && allSongs !== null && playingSong !== undefined) {
         const percentagePlayed = Math.min(100, ((timeElapsed / totalDuration) * 100).toFixed(2));
         const bar = renderBar(percentagePlayed);
-        process.stdout.write(`\x1B[${allSongs.length + 2};1H\r\x1B[0KPlaying: ${allSongs[playingIndex]}`);
+        process.stdout.write(`\x1B[${allSongs.length + 2};1H\r\x1B[0KPlaying: ${playingSong}`);
         process.stdout.write(`\n\x1B[0K${Math.ceil(timeElapsed)} / ${totalDuration} || ${percentagePlayed} %`);
         process.stdout.write(`\n\x1B[0K${bar}\n`);
     }
@@ -128,23 +128,30 @@ function renderBar(percentagePlayed) {
     return progressBar;
 }
 
-function listSongs(songDirPath) {
-    if (!allSongs) {
-        allSongs = readdirSync(songDirPath).filter(file => !file.startsWith('.'));
-    }
+function refreshSongs() {
+    const selectedSong = allSongs?.[cursor];
+    const songs = readdirSync(songDir).filter(file => !file.startsWith('.')).sort();
+    const changed = allSongs === null || songs.length !== allSongs.length || songs.some((song, index) => song !== allSongs[index]);
+    allSongs = songs;
 
-    process.stdout.write("\x1B[2;1H");
+    const selectedIndex = allSongs.indexOf(selectedSong);
+    cursor = selectedIndex !== -1 ? selectedIndex : Math.max(0, Math.min(cursor, allSongs.length - 1));
+    return changed;
+}
+
+function listSongs() {
+    process.stdout.write("\x1B[2;1H\x1B[0J");
 
     if (allSongs.length === 0) {
         process.stdout.write("\r\x1B[0KNo songs found in the songs folder.\n");
-        return;
+    } else {
+        const menuText = allSongs.map((songName, index) => {
+            return ("\r\x1B[0K" + (index === cursor ? '> ' : '  ') + songName);
+        }).join("\n");
+
+        process.stdout.write(menuText + "\n");
     }
 
-    const menuText = allSongs.map((songName, index) => {
-        return ("\r\x1B[0K" + (index === cursor ? '> ' : '  ') + songName);
-    }).join("\n");
-
-    process.stdout.write(menuText + "\n");
     updateProgress();
 }
 
@@ -154,7 +161,7 @@ function stopPlayback() {
     if (trackingInterval !== undefined) clearInterval(trackingInterval);
     trackingInterval = undefined;
     isPaused = true;
-    playingIndex = -1;
+    playingSong = undefined;
     timeElapsed = undefined;
     totalDuration = undefined;
 
@@ -166,17 +173,23 @@ function showPlaybackError(message) {
 }
 
 function playSong(targetCursor) {
-    if (!Number.isInteger(targetCursor) || targetCursor < 0 || targetCursor >= allSongs.length) return;
+    const songName = allSongs?.[targetCursor];
+    refreshSongs();
+    const targetIndex = allSongs.indexOf(songName);
+    if (!Number.isInteger(targetCursor) || targetIndex === -1) {
+        listSongs();
+        return;
+    }
 
     stopPlayback();
 
     isPaused = false;
-    cursor = targetCursor;
-    playingIndex = targetCursor;
-    listSongs(songDir);
+    cursor = targetIndex;
+    playingSong = songName;
+    listSongs();
     process.stdout.write(`\x1B[${allSongs.length + 2};1H\r\x1B[0J`);
 
-    const songFinalPath = join(songDir, allSongs[targetCursor]);
+    const songFinalPath = join(songDir, songName);
 
     // Node owns the playlist. Each VLC instance plays one track, then exits.
     let currentProcess;
@@ -227,25 +240,49 @@ function playSong(targetCursor) {
 
         vlcPlayProcess = undefined;
         stopPlayback();
+        refreshSongs();
+        listSongs();
 
         if (code === 0 && !signal && !playbackFailed) {
-            playSong((targetCursor + 1) % allSongs.length);
+            playSong(getAdjacentSongIndex(songName, 1));
         } else {
             const reason = playbackFailed
-                ? `VLC could not play ${allSongs[targetCursor]}`
+                ? `VLC could not play ${songName}`
                 : `VLC stopped ${signal ? `by ${signal}` : `with exit code ${code}`}`;
             showPlaybackError(reason);
         }
     });
 }
 
+function getAdjacentSongIndex(songName, offset) {
+    if (allSongs.length === 0) return -1;
+    const songIndex = allSongs.indexOf(songName);
+    if (songIndex !== -1) return (songIndex + offset + allSongs.length) % allSongs.length;
+
+    // A removed track keeps its place in the sorted playback order.
+    const followingIndex = allSongs.findIndex(song => song > songName);
+    const nextIndex = followingIndex === -1 ? 0 : followingIndex;
+    return offset > 0 ? nextIndex : (nextIndex - 1 + allSongs.length) % allSongs.length;
+}
+
 function skipSong(offset) {
     if (allSongs.length === 0) return;
-    const baseIndex = playingIndex === -1 ? cursor : playingIndex;
-    playSong((baseIndex + offset + allSongs.length) % allSongs.length);
+    const targetIndex = playingSong === undefined
+        ? (cursor + offset + allSongs.length) % allSongs.length
+        : getAdjacentSongIndex(playingSong, offset);
+    playSong(targetIndex);
 }
 
 function handleInput(data) {
+    // ctrl+c
+    if (data[0] === 0x03) {
+        stopPlayback();
+        process.exit();
+        return;
+    }
+
+    if (refreshSongs()) listSongs();
+
     if (data[0] === 0x1b) {
         if (allSongs.length === 0) return;
         if (data[1] === 0x5b) {
@@ -260,7 +297,7 @@ function handleInput(data) {
                 cursor = (cursor + 1) % allSongs.length; 
             }
         }
-        listSongs(songDir);
+        listSongs();
         return;
     }
 
@@ -280,12 +317,6 @@ function handleInput(data) {
     if (data[0] === 0x0d) {
         playSong(cursor);
         return;
-    }
-
-    // ctrl+c
-    if (data[0] === 0x03) {
-        stopPlayback();
-        process.exit(); 
     }
 
     // play/pause 'p' (112) or space (32)
@@ -314,7 +345,8 @@ function main() {
     }
 
     process.stdout.write('\x1b[2J');
-    listSongs(songDir);
+    refreshSongs();
+    listSongs();
     if (process.stdin.isTTY) process.stdin.setRawMode(true);
     process.stdin.on('data', handleInput);
 }

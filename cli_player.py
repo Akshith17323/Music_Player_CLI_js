@@ -1,5 +1,6 @@
 import subprocess
 import os
+import select
 import shutil
 import sys
 
@@ -20,10 +21,18 @@ def resolveAfplay():
     raise RuntimeError(f"afplay{location} was not found or is not executable. Set AFPLAY_PATH to its executable path.")
 
 
-def listSongs(directory_path, user_selection_index=0, playing_song=None, playback_error=None):
+def refreshSongs(directory_path, songs, user_selection_index):
+    selected_song = songs[user_selection_index] if 0 <= user_selection_index < len(songs) else None
+    refreshed_songs = sorted([f for f in os.listdir(directory_path) if not f.startswith('.')])
+    if selected_song in refreshed_songs:
+        user_selection_index = refreshed_songs.index(selected_song)
+    else:
+        user_selection_index = max(0, min(user_selection_index, len(refreshed_songs) - 1))
+    return refreshed_songs, user_selection_index
+
+
+def listSongs(songs, user_selection_index=0, playing_song=None, playback_error=None):
     sys.stdout.write('\033[2J\033[H') # Clear screen
-    songs = sorted([f for f in os.listdir(directory_path) if not f.startswith('.')])
-    user_selection_index = max(0, min(user_selection_index, len(songs) - 1))
     if not songs:
         sys.stdout.write("No songs found in the songs folder.\r\n")
     for ind, song in enumerate(songs):
@@ -59,6 +68,22 @@ def playSong(song_name, player_command):
     return current_player
 
 
+def pollPlayback():
+    global current_player, current_playing_song
+    if current_player is None:
+        return False, None
+    return_code = current_player.poll()
+    if return_code is None:
+        return False, None
+
+    current_player = None
+    current_playing_song = None
+    if return_code == 0:
+        return True, None
+    reason = f"by signal {-return_code}" if return_code < 0 else f"with exit code {return_code}"
+    return True, f"afplay stopped {reason}"
+
+
 def main():
     if sys.platform != "darwin":
         print(f"Setup error: This player requires macOS and afplay; detected {sys.platform}.", file=sys.stderr)
@@ -77,35 +102,45 @@ def main():
 
     user_selection_index = 0
     playback_error = None
-    songs = listSongs(SONGS_DIR, user_selection_index, current_playing_song)
+    songs, user_selection_index = refreshSongs(SONGS_DIR, [], user_selection_index)
+    listSongs(songs, user_selection_index, current_playing_song)
     fd = sys.stdin.fileno()
     old_settings = termios.tcgetattr(fd)
 
     try:
         tty.setraw(fd)
         while True:
-            char = sys.stdin.read(1)
-            if char in ('\x03', ''): # Ctrl+C or end of input
+            finished, completion_error = pollPlayback()
+            if finished:
+                playback_error = completion_error
+                songs, user_selection_index = refreshSongs(SONGS_DIR, songs, user_selection_index)
+                listSongs(songs, user_selection_index, current_playing_song, playback_error)
+
+            readable, _, _ = select.select([fd], [], [], 0.1 if current_player is not None else None)
+            if not readable:
+                continue
+            char = os.read(fd, 1)
+            if char in (b'\x03', b''): # Ctrl+C or end of input
                 return 0
 
-            if char in ('\r', '\n') and songs:
+            songs, user_selection_index = refreshSongs(SONGS_DIR, songs, user_selection_index)
+            if char in (b'\r', b'\n') and songs:
                 try:
                     playSong(songs[user_selection_index], player_command)
                     playback_error = None
                 except RuntimeError as error:
                     playback_error = str(error)
 
-            if char == '\x1b':
-                next_char = sys.stdin.read(1)
-                if next_char == '[':
-                    arrow_char = sys.stdin.read(1)
-                    if arrow_char == 'A': # Up Key
+            if char == b'\x1b':
+                next_char = os.read(fd, 1)
+                if next_char == b'[':
+                    arrow_char = os.read(fd, 1)
+                    if arrow_char == b'A': # Up Key
                         user_selection_index = max(0, user_selection_index - 1)
-                    elif arrow_char == 'B' and songs: # Down Key
+                    elif arrow_char == b'B' and songs: # Down Key
                         user_selection_index = min(len(songs) - 1, user_selection_index + 1)
 
-            songs = listSongs(SONGS_DIR, user_selection_index, current_playing_song, playback_error)
-            user_selection_index = max(0, min(user_selection_index, len(songs) - 1))
+            listSongs(songs, user_selection_index, current_playing_song, playback_error)
     finally:
         termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
 

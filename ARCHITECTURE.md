@@ -1,6 +1,6 @@
 # CLI Music Player Architecture
 
-Verified against the current implementations on **2026-11-08**. Earlier architecture reviews are available in Git history.
+Verified against the current implementations on **2026-11-09**. Earlier architecture reviews are available in Git history.
 
 ## Repository layout
 
@@ -10,13 +10,13 @@ Verified against the current implementations on **2026-11-08**. Earlier architec
 | `cli_player.py` | Earlier `afplay` prototype with arrow selection and Enter-to-play. |
 | `songs/` | Fixed library directory adjacent to the entry points. |
 | `README.md` | Setup, controls, and learning notes. |
-| `ARCHITECTURE.md` | Current runtime design and review follow-up. |
+| `ARCHITECTURE.md` | Current runtime design and verification. |
 | `CLI_Music_Player_Project_Report.pdf` | Historical coursework report. |
 | `assets/Music_cli_player_Architecture.png` | Historical architecture illustration. |
 | `prompts/history.txt` | Development-prompt history. |
 | `.gitignore` | Ignore rules, including the local `BUGS.md` audit. |
 
-`BUGS.md`, when present locally, records the original audit and follow-up status.
+`BUGS.md`, when present locally, records open issues and limitations.
 
 The main player uses Node's built-in modules. There is no package-install or build step. The root entry points stay directly runnable with `node cli_player.js` and `python3 cli_player.py`.
 
@@ -36,21 +36,24 @@ JavaScript validates executable files with filesystem permission checks; Python 
 
 ### Library and selection
 
-`listSongs()` reads the adjacent `songs/` directory once and filters dot-prefixed entries. `cursor` is the highlighted selection; `playingIndex` identifies the playing track, or `-1` when stopped.
+`refreshSongs()` reads and sorts the adjacent `songs/` directory, filtering dot-prefixed entries. It runs at startup, before handling input or starting playback, and on active-player completion. Selection is preserved by filename, with a clamped fallback if that file disappears. `listSongs()` renders the current snapshot and clears the previous menu area.
+
+`cursor` is the highlighted selection; `playingSong` stores the active track's filename, or `undefined` when stopped. Playback identity is independent of the current directory listing.
 
 - Up/Down moves the selection with wraparound.
 - Enter starts or restarts the selected track.
 - `skipSong()` chooses next/previous relative to the playing track, falling back to the selection before playback starts.
 - Starting a track, including automatic advancement, synchronizes the selection with that track.
+- If the active track leaves the library, it can finish playing; next/previous uses its filename's position in the refreshed sorted order.
 - Empty libraries show a message and disable playback/navigation arithmetic.
 
-There is no command-line library-path argument. Directory contents are cached, and file-type/access validation is still limited.
+There is no command-line library-path argument, and file-type/access validation is still limited.
 
-The Python prototype refreshes its directory listing on input, clamps the selection to the refreshed list, and skips playback requests when the list is empty. This also handles hidden-only libraries and a library becoming empty during use.
+The Python prototype refreshes its directory listing before handling input and after playback completion. It preserves the selected filename when available, otherwise clamps the selection to the refreshed list, and skips playback requests when the list is empty. This also handles hidden-only libraries and a library becoming empty during use.
 
 ### Playback ownership
 
-`playSong()` validates its target, calls `stopPlayback()`, updates selection/state, and starts one VLC child for that track. `stopPlayback()` invalidates the current process reference **before** killing the old child, clears the timer, and resets playback state.
+`playSong()` captures the requested filename and revalidates it against a fresh directory listing before calling `stopPlayback()`, updating selection/state, and starting one VLC child for that track. `stopPlayback()` invalidates the current process reference **before** killing the old child, clears the timer, and resets playback state.
 
 Each callback captures its own `currentProcess`. Completion, process errors, input-stream errors, and metadata results may change shared state only while that process still owns playback. This prevents a late callback from an old song from stopping or advancing a replacement.
 
@@ -67,12 +70,10 @@ The Node application owns playlist order and wraparound. Each VLC process receiv
 On the active child's `close` event:
 
 1. Clear the closed process reference and reset tracking.
-2. For exit code zero, no terminating signal, and no recognized media failure, start `(completedIndex + 1) % allSongs.length`.
+2. Refresh the library and redraw the stopped state. For exit code zero, no terminating signal, and no recognized media failure, find the completed filename's next track in the refreshed order and start it if available.
 3. Otherwise display a playback error and wait for another user selection.
 
-The last track wraps to the first; a one-track library repeats that track. Timer estimates and `afinfo` duration do not decide when a track ends.
-
-**Why the old review's recommendation was insufficient:** Default VLC RC mode stays alive after audio finishes. A process-close listener alone cannot detect that endpoint. Explicit one-track exit behavior makes the listener useful.
+The last track wraps to the first; a one-track library repeats that track. If the completed filename was removed, its next surviving neighbor is used; an empty library stays stopped. Timer estimates and `afinfo` duration do not decide when a track ends.
 
 ### Child-process streams and errors
 
@@ -85,7 +86,7 @@ VLC 3.0.24 can report an unreadable file and still exit with code zero. Recogniz
 
 VLC spawn, stdin-write, and stderr-read errors stop/reset the current player and produce a visible error. Synchronous spawn/write exceptions are handled as well as asynchronous process/stream errors. An `afinfo` spawn or stdout-read failure rejects the metadata lookup; the owning playback instance is stopped and the dependency error is shown. Superseded metadata errors cannot stop a replacement track.
 
-Python catches `afplay` launch failures, clears the failed playback state, displays an error, and continues accepting input. It retains the existing player reference if stopping that player fails. Executable validation reduces setup errors, while runtime handlers cover removal or permission changes after validation.
+Python catches `afplay` launch failures, clears the failed playback state, displays an error, and continues accepting input. It retains the existing player reference if stopping that player fails. While playback is active, the input loop checks `Popen.poll()` every 100 ms: completion clears the process and track references and redraws the UI; nonzero or signalled exits also display an error. Successful completion stops until the next playback request. Executable validation reduces setup errors, while runtime handlers cover removal or permission changes after validation.
 
 ### Metadata, progress, and rendering
 
@@ -97,7 +98,7 @@ The displayed time is an estimate. VLC startup/buffering, wall-clock changes, fa
 
 ### Keyboard input and shutdown
 
-The JS entry point enables raw mode for TTY stdin and handles incoming data buffers. Space or `p` writes `pause\n` to the active VLC child. Raw Ctrl+C calls `stopPlayback()` and exits.
+The JS entry point enables raw mode for TTY stdin and handles incoming data buffers. Space or `p` writes `pause\n` to the active VLC child. Raw Ctrl+C calls `stopPlayback()` and exits. Python waits for input with `select.select()` and reads raw bytes with `os.read()` so queued keystrokes remain visible to the readiness check.
 
 Input-buffer decoding, JS external signal/EOF cleanup, and terminal resizing still need dedicated improvements. The Python prototype has its own simpler input loop, validates that stdin is a terminal, and restores its terminal settings on loop exit. Its playback-child cleanup still needs improvement.
 
@@ -105,32 +106,29 @@ Input-buffer decoding, JS external signal/EOF cleanup, and terminal resizing sti
 
 ```mermaid
 flowchart TD
-    Start[Load cached song list] --> Input[Wait for keyboard input]
-    Input -->|Arrows| Select[Move selection]
+    Start[Read sorted song list] --> Input[Wait for keyboard input]
+    Input --> Refresh[Refresh library and reconcile selection]
+    Refresh -->|Arrows| Select[Move selection]
     Select --> Input
-    Input -->|Enter or next/previous| Play[Validate target and stop previous player]
+    Refresh -->|Enter or next/previous| Play[Revalidate filename and stop previous player]
     Play --> Spawn[Spawn one-track VLC with play-and-exit]
     Spawn --> Metadata[Fetch duration asynchronously]
     Spawn --> Timer[Track estimated elapsed time]
-    Input -->|Space or p| Pause[Send RC pause command]
+    Refresh -->|Space or p| Pause[Send RC pause command]
     Pause --> Input
     Spawn --> Close[Child closes]
     Close --> Owner{Still the current player?}
     Owner -->|No| Ignore[Ignore stale completion]
-    Owner -->|Yes| Reset[Reset playback and timer]
+    Owner -->|Yes| Reset[Reset playback and timer; refresh library]
     Reset --> Success{Successful exit with no media error?}
-    Success -->|Yes| Next[Choose next track with wraparound]
-    Next --> Play
+    Success -->|Yes| Next[Find next filename with wraparound]
+    Next -->|Track available| Play
+    Next -->|Empty library| Input
     Success -->|No| Error[Display playback error]
     Error --> Input
     Input -->|Ctrl+C| Exit[Stop current playback and exit]
 ```
 
-## Review follow-up and verification
+## Verification
 
-- **B01:** Fixed by explicit end-of-track process exit and guarded automatic advancement.
-- **Related lifecycle corrections:** Next/previous uses the playing index; old callbacks cannot interrupt replacements; active failures stop timing; child pipes are consumed or ignored; both players guard empty libraries and explain dependency failures.
-- **Historical claims corrected:** Enter plays/restarts rather than exits; JS navigation wraps; pause uses RC commands; metadata is asynchronous; elapsed time uses measured deltas; exceeding 100% was already capped.
-- **Historical artifacts:** Git history, the PDF, and the original image explain development history. This document describes the current implementation.
-
-Development verification on **2026-11-08** passed **14 JavaScript checks** (including native VLC playback) and **8 Python checks** covering dependency validation, runtime failures, and empty/changing libraries. Native checks confirmed **A → B → A** despite conflicting VLC playback preferences, and that an unreadable track stops with an error even when VLC exits successfully.
+Development verification on **2026-11-09** passed **17 JavaScript behavioral checks** and **9 Python pseudo-terminal checks** covering changing/empty libraries, selection and playback identity, completion, runtime failures, and replacement-player ownership. Earlier native VLC checks confirmed **A → B → A** despite conflicting playback preferences, and that an unreadable track stops with an error even when VLC exits successfully.

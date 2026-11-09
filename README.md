@@ -22,6 +22,8 @@ node cli_player.js
 
 The library path is fixed relative to the script. Tracks automatically advance on completion and wrap from the last song to the first. An empty or hidden-only library displays a message and ignores playback/navigation requests.
 
+The sorted song list refreshes on input and track completion. Selection follows the same filename when available, otherwise it moves to a valid entry. Playback keeps its track identity even if that file is removed from the library; skipping and automatic advancement use the refreshed order.
+
 | Key | Action |
 | --- | --- |
 | Up / Down | Browse the song list with wraparound. |
@@ -37,7 +39,7 @@ Playback failures stop the current track and display an error; select another so
 
 `python3 cli_player.py` runs the earlier `afplay` prototype. It supports clamped arrow navigation and Enter-to-play; pause, skip shortcuts, progress tracking, and automatic advancement belong to the JavaScript player. The prototype still needs child-process cleanup on exit.
 
-The Python entry point also requires macOS and an interactive terminal. It discovers `afplay` on `PATH` or at `/usr/bin/afplay`; set `AFPLAY_PATH` for a custom executable. Launch failures are shown in the UI, and an empty library can be browsed or refreshed safely.
+The Python entry point also requires macOS and an interactive terminal. It discovers `afplay` on `PATH` or at `/usr/bin/afplay`; set `AFPLAY_PATH` for a custom executable. Playback completion clears the playing status automatically, and launch/runtime failures are shown in the UI. It refreshes the library before handling input and after completion, preserving selection by filename and safely handling empty lists.
 
 See [ARCHITECTURE.md](ARCHITECTURE.md) for the current design, repository-root file roles, verified behavior, and known limitations. The [project PDF](CLI_Music_Player_Project_Report.pdf) and original diagram are historical development artifacts; earlier architecture reviews are available in Git history.
 
@@ -87,7 +89,7 @@ To build an interactive CLI music player that reads songs from a folder and give
 This brings together file-system reads, terminal rendering, playback controls, and asynchronous process management. The current architecture documentation records the remaining edge cases and limitations.
 
 ### Key Takeaway
-State management is important: `cursor`, `playingIndex`, `isPaused`, `totalDuration`, `timeElapsed`, and `trackingInterval` keep the UI coordinated with the current playback process. Exact audio-position synchronization would require querying VLC instead of estimating elapsed time.
+State management is important: `cursor`, `playingSong`, `isPaused`, `totalDuration`, `timeElapsed`, and `trackingInterval` keep the UI coordinated with the current playback process. Exact audio-position synchronization would require querying VLC instead of estimating elapsed time.
 
 ---
 
@@ -100,7 +102,7 @@ State management is important: `cursor`, `playingIndex`, `isPaused`, `totalDurat
    If you just move the cursor back up and write over the old text, you get this weird "ghosting" effect. For example, if the previous song name was really long and the new one is short, the leftover letters from the long name will still be visible at the end of the line. Clearing the line first makes sure we have a blank slate before drawing the new frame.
 
 3. **What does the selected-song variable represent, and how does navigation stay within the list?**
-   `cursor` identifies the highlighted entry in `allSongs`, while `playingIndex` identifies the playing track. JS navigation uses modulo arithmetic to wrap between the first and last entries; empty lists are guarded in both players. The Python prototype clamps its selection and reconciles it after refreshing the library.
+   `cursor` identifies the highlighted entry in `allSongs`, while `playingSong` stores the playing track's filename independently of its list position. JS navigation wraps between the first and last entries; Python navigation clamps at the ends. Both players preserve selection by filename during refresh, clamp it when that file disappears, and guard empty lists.
 
 4. **Why was afplay + SIGSTOP/SIGCONT not a reliable solution for a real pause/resume feature? What changed in the final approach?**
    Freezing a process with `SIGSTOP` suspends the entire backend rather than asking it to pause media playback. The JS player uses VLC's Remote Control interface (`--intf rc`) and writes `pause\n` to stdin to toggle pause/resume. Elapsed time is still estimated locally.

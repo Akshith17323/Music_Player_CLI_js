@@ -1,6 +1,7 @@
 import subprocess
 import os
 import select
+import signal
 import shutil
 import sys
 
@@ -8,6 +9,7 @@ SONGS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "songs")
 
 current_player = None
 current_playing_song = None
+PLAYER_STOP_TIMEOUT = 1.0
 
 
 def resolveAfplay():
@@ -48,16 +50,35 @@ def listSongs(songs, user_selection_index=0, playing_song=None, playback_error=N
     return songs
 
 
-def playSong(song_name, player_command):
+def stopPlayback():
     global current_player, current_playing_song
+    player = current_player
+    if player is None:
+        current_playing_song = None
+        return
+
     try:
-        if current_player:
-            current_player.terminate()
-    except OSError as error:
+        if player.poll() is None:
+            player.terminate()
+            try:
+                player.wait(timeout=PLAYER_STOP_TIMEOUT)
+            except subprocess.TimeoutExpired:
+                player.kill()
+                player.wait(timeout=PLAYER_STOP_TIMEOUT)
+    except ProcessLookupError:
+        # The player exited between polling and signalling it.
+        pass
+    except (OSError, subprocess.TimeoutExpired) as error:
         raise RuntimeError(f"Could not stop the current player: {error}") from error
 
-    current_player = None
-    current_playing_song = None
+    if current_player is player:
+        current_player = None
+        current_playing_song = None
+
+
+def playSong(song_name, player_command):
+    global current_player, current_playing_song
+    stopPlayback()
     song_path = os.path.join(SONGS_DIR, song_name)
     # Use Popen instead of run so it doesn't block the UI
     try:
@@ -84,6 +105,26 @@ def pollPlayback():
     return True, f"afplay stopped {reason}"
 
 
+def shutdownForSignal(signum, _frame):
+    raise SystemExit(128 + signum)
+
+
+def cleanupApplication(fd, old_settings, termios):
+    cleanup_errors = []
+    try:
+        stopPlayback()
+    except Exception as error:
+        cleanup_errors.append(str(error))
+
+    try:
+        termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
+    except Exception as error:
+        cleanup_errors.append(f"Could not restore terminal settings: {error}")
+
+    for error in cleanup_errors:
+        print(f"Shutdown error: {error}", file=sys.stderr)
+
+
 def main():
     if sys.platform != "darwin":
         print(f"Setup error: This player requires macOS and afplay; detected {sys.platform}.", file=sys.stderr)
@@ -106,6 +147,10 @@ def main():
     listSongs(songs, user_selection_index, current_playing_song)
     fd = sys.stdin.fileno()
     old_settings = termios.tcgetattr(fd)
+    handled_signals = [signal.SIGINT, signal.SIGTERM, signal.SIGHUP, signal.SIGQUIT]
+    previous_signal_handlers = {signum: signal.getsignal(signum) for signum in handled_signals}
+    for signum in handled_signals:
+        signal.signal(signum, shutdownForSignal)
 
     try:
         tty.setraw(fd)
@@ -142,7 +187,14 @@ def main():
 
             listSongs(songs, user_selection_index, current_playing_song, playback_error)
     finally:
-        termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
+        # Do not let a second shutdown signal interrupt child and terminal cleanup.
+        for signum in handled_signals:
+            signal.signal(signum, signal.SIG_IGN)
+        try:
+            cleanupApplication(fd, old_settings, termios)
+        finally:
+            for signum, previous_handler in previous_signal_handlers.items():
+                signal.signal(signum, previous_handler)
 
 
 if __name__ == "__main__":

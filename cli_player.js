@@ -14,6 +14,12 @@ let timeElapsed = undefined;
 let trackingInterval = undefined;
 let playingSong = undefined;
 let executables = undefined;
+const ownedChildProcesses = new Set();
+let stdinRawModeConfigured = false;
+let previousStdinRawMode = false;
+let shutdownStarted = false;
+let applicationCleanedUp = false;
+let shutdownHandlersInstalled = false;
 
 function findExecutable(command) {
     const expanded = command.startsWith('~/') ? join(homedir(), command.slice(2)) : command;
@@ -63,12 +69,29 @@ function executableFailure(name, variable, error) {
     return new Error(`${name}: ${error.message}${hint}`);
 }
 
+function ownChildProcess(childProcess) {
+    ownedChildProcesses.add(childProcess);
+    childProcess.once('close', () => ownedChildProcesses.delete(childProcess));
+    return childProcess;
+}
+
+function stopOwnedChildProcesses() {
+    for (const childProcess of ownedChildProcesses) {
+        if (childProcess.exitCode != null || childProcess.signalCode != null) continue;
+        try {
+            childProcess.kill('SIGKILL');
+        } catch {
+            // The process may have exited between the state check and kill.
+        }
+    }
+}
+
 async function getSongDuration(songFilePath) {
     return new Promise((resolve, reject) => {
         const fail = error => reject(executableFailure('afinfo', 'AFINFO_PATH', error));
         let afinfoCP;
         try {
-            afinfoCP = spawn(executables.afinfo, [songFilePath], { stdio: ['ignore', 'pipe', 'ignore'] });
+            afinfoCP = ownChildProcess(spawn(executables.afinfo, [songFilePath], { stdio: ['ignore', 'pipe', 'ignore'] }));
         } catch (error) {
             fail(error);
             return;
@@ -156,7 +179,6 @@ function listSongs() {
 }
 
 function stopPlayback() {
-    const previousProcess = vlcPlayProcess;
     vlcPlayProcess = undefined;
     if (trackingInterval !== undefined) clearInterval(trackingInterval);
     trackingInterval = undefined;
@@ -165,7 +187,7 @@ function stopPlayback() {
     timeElapsed = undefined;
     totalDuration = undefined;
 
-    if (previousProcess) previousProcess.kill("SIGKILL");
+    stopOwnedChildProcesses();
 }
 
 function showPlaybackError(message) {
@@ -194,13 +216,13 @@ function playSong(targetCursor) {
     // Node owns the playlist. Each VLC instance plays one track, then exits.
     let currentProcess;
     try {
-        currentProcess = spawn(executables.vlc, [
+        currentProcess = ownChildProcess(spawn(executables.vlc, [
             "--intf", "rc", "--play-and-exit",
             "--no-loop", "--no-repeat", "--no-random",
             "--no-play-and-stop", "--no-play-and-pause", "--no-start-paused",
             "--no-quiet", "--verbose", "0", "--no-color",
             songFinalPath
-        ], { stdio: ['pipe', 'ignore', 'pipe'] });
+        ], { stdio: ['pipe', 'ignore', 'pipe'] }));
     } catch (error) {
         stopPlayback();
         showPlaybackError(executableFailure('VLC', 'VLC_PATH', error).message);
@@ -273,11 +295,70 @@ function skipSong(offset) {
     playSong(targetIndex);
 }
 
+function restoreTerminal() {
+    process.stdin.removeListener('data', handleInput);
+    process.stdin.removeListener('end', handleInputEnd);
+    process.stdin.removeListener('close', handleInputEnd);
+    process.stdin.removeListener('error', handleInputError);
+
+    if (stdinRawModeConfigured && process.stdin.isTTY && typeof process.stdin.setRawMode === 'function') {
+        try {
+            process.stdin.setRawMode(previousStdinRawMode);
+        } catch {
+            // Shutdown must continue even if the terminal has already closed.
+        }
+    }
+    stdinRawModeConfigured = false;
+    process.stdin.pause();
+}
+
+function cleanupApplication() {
+    if (applicationCleanedUp) return;
+    applicationCleanedUp = true;
+    try {
+        stopPlayback();
+    } finally {
+        restoreTerminal();
+    }
+}
+
+function shutdown(exitCode) {
+    if (shutdownStarted) return;
+    shutdownStarted = true;
+    cleanupApplication();
+    process.exit(exitCode);
+}
+
+function handleInputEnd() {
+    shutdown(0);
+}
+
+function handleInputError(error) {
+    try {
+        process.stderr.write(`Input error: ${error.message}\n`);
+    } finally {
+        shutdown(1);
+    }
+}
+
+function installShutdownHandlers() {
+    if (shutdownHandlersInstalled) return;
+    shutdownHandlersInstalled = true;
+
+    const signalExitCodes = { SIGHUP: 129, SIGINT: 130, SIGQUIT: 131, SIGTERM: 143 };
+    for (const [signal, exitCode] of Object.entries(signalExitCodes)) {
+        process.once(signal, () => shutdown(exitCode));
+    }
+
+    // Preserve Node's normal fatal-error reporting while releasing resources first.
+    process.once('uncaughtExceptionMonitor', cleanupApplication);
+    process.once('exit', cleanupApplication);
+}
+
 function handleInput(data) {
     // ctrl+c
     if (data[0] === 0x03) {
-        stopPlayback();
-        process.exit();
+        shutdown(0);
         return;
     }
 
@@ -344,11 +425,20 @@ function main() {
         return;
     }
 
+    installShutdownHandlers();
+
     process.stdout.write('\x1b[2J');
     refreshSongs();
     listSongs();
-    if (process.stdin.isTTY) process.stdin.setRawMode(true);
+    if (process.stdin.isTTY) {
+        previousStdinRawMode = Boolean(process.stdin.isRaw);
+        process.stdin.setRawMode(true);
+        stdinRawModeConfigured = true;
+    }
     process.stdin.on('data', handleInput);
+    process.stdin.once('end', handleInputEnd);
+    process.stdin.once('close', handleInputEnd);
+    process.stdin.once('error', handleInputError);
 }
 
 main();

@@ -1,6 +1,6 @@
 # CLI Music Player Architecture
 
-Verified against the current implementations on **2026-11-09**. Earlier architecture reviews are available in Git history.
+Verified against the current implementations on **2026-11-10**. Earlier architecture reviews are available in Git history.
 
 ## Repository layout
 
@@ -53,7 +53,7 @@ The Python prototype refreshes its directory listing before handling input and a
 
 ### Playback ownership
 
-`playSong()` captures the requested filename and revalidates it against a fresh directory listing before calling `stopPlayback()`, updating selection/state, and starting one VLC child for that track. `stopPlayback()` invalidates the current process reference **before** killing the old child, clears the timer, and resets playback state.
+`playSong()` captures the requested filename and revalidates it against a fresh directory listing before calling `stopPlayback()`, updating selection/state, and starting one VLC child for that track. Every VLC and `afinfo` child is added to an owned-process registry until its `close` event. `stopPlayback()` invalidates the current process reference **before** killing owned children, clears the timer, and resets playback state.
 
 Each callback captures its own `currentProcess`. Completion, process errors, input-stream errors, and metadata results may change shared state only while that process still owns playback. This prevents a late callback from an old song from stopping or advancing a replacement.
 
@@ -94,13 +94,13 @@ Python catches `afplay` launch failures, clears the failed playback state, displ
 
 `startElapsedTracking()` runs a 100 ms interval. It measures `Date.now()` differences and adds them while a player exists and the local pause flag is false. `updateProgress()` renders the current filename, elapsed/total time, and a 50-character bar once duration is available. The percentage has an upper cap of 100.
 
-The displayed time is an estimate. VLC startup/buffering, wall-clock changes, failed/zero metadata, and terminal-size assumptions are documented follow-up areas. Metadata subprocesses also still lack cancellation and timeouts.
+The displayed time is an estimate. VLC startup/buffering, wall-clock changes, failed/zero metadata, and terminal-size assumptions are documented follow-up areas. Superseded metadata subprocesses are killed with the other children, but metadata lookup still has no independent timeout.
 
 ### Keyboard input and shutdown
 
-The JS entry point enables raw mode for TTY stdin and handles incoming data buffers. Space or `p` writes `pause\n` to the active VLC child. Raw Ctrl+C calls `stopPlayback()` and exits. Python waits for input with `select.select()` and reads raw bytes with `os.read()` so queued keystrokes remain visible to the readiness check.
+The JS entry point enables raw mode for TTY stdin and handles incoming data buffers. Space or `p` writes `pause\n` to the active VLC child. One idempotent application-cleanup path stops the timer, kills every owned VLC/`afinfo` child, removes input listeners, and restores the prior terminal mode. Raw Ctrl+C, stdin end/close, `SIGHUP`, `SIGINT`, `SIGQUIT`, and `SIGTERM` use this path. The process `exit` and `uncaughtExceptionMonitor` hooks provide final synchronous cleanup without suppressing Node's fatal-error reporting.
 
-Input-buffer decoding, JS external signal/EOF cleanup, and terminal resizing still need dedicated improvements. The Python prototype has its own simpler input loop, validates that stdin is a terminal, and restores its terminal settings on loop exit. Its playback-child cleanup still needs improvement.
+Input-buffer decoding and terminal resizing still need dedicated improvements. The Python prototype has its own simpler input loop and validates that stdin is a terminal. Its `finally` path now terminates and waits for `afplay`, escalates to `kill()` after a bounded timeout, and restores terminal settings. Signal handlers turn catchable termination signals into normal stack unwinding so that cleanup also runs on externally requested exits and unhandled runtime errors.
 
 ## Playback flow
 
@@ -126,9 +126,9 @@ flowchart TD
     Next -->|Empty library| Input
     Success -->|No| Error[Display playback error]
     Error --> Input
-    Input -->|Ctrl+C| Exit[Stop current playback and exit]
+    Input -->|Ctrl+C, EOF, or termination signal| Exit[Stop children, restore terminal, and exit]
 ```
 
 ## Verification
 
-Development verification on **2026-11-09** passed **17 JavaScript behavioral checks** and **9 Python pseudo-terminal checks** covering changing/empty libraries, selection and playback identity, completion, runtime failures, and replacement-player ownership. Earlier native VLC checks confirmed **A → B → A** despite conflicting playback preferences, and that an unreadable track stops with an error even when VLC exits successfully.
+Development verification through **2026-11-10** includes **17 JavaScript behavioral checks** and **9 Python pseudo-terminal checks** covering changing/empty libraries, selection and playback identity, completion, runtime failures, and replacement-player ownership. Native shutdown checks additionally confirmed that JS stops VLC and pending `afinfo` jobs on raw Ctrl+C, `SIGTERM`, and stdin EOF, while Python stops `afplay` and restores the terminal on raw Ctrl+C and `SIGTERM`. Earlier native VLC checks confirmed **A → B → A** despite conflicting playback preferences, and that an unreadable track stops with an error even when VLC exits successfully.

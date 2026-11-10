@@ -31,13 +31,13 @@ The sorted song list refreshes on input and track completion. Selection follows 
 | `n` | Play the next track relative to current playback. |
 | `b` / `d` | Play the previous track relative to current playback. |
 | Space / `p` | Pause or resume. |
-| Ctrl+C | Stop the current playback process and exit. |
+| Ctrl+C | Stop all child processes, restore the terminal, and exit. |
 
 Playback failures stop the current track and display an error; select another song with the controls above. Progress is a timer-based estimate.
 
 ### Python Prototype
 
-`python3 cli_player.py` runs the earlier `afplay` prototype. It supports clamped arrow navigation and Enter-to-play; pause, skip shortcuts, progress tracking, and automatic advancement belong to the JavaScript player. The prototype still needs child-process cleanup on exit.
+`python3 cli_player.py` runs the earlier `afplay` prototype. It supports clamped arrow navigation and Enter-to-play; pause, skip shortcuts, progress tracking, and automatic advancement belong to the JavaScript player. It stops `afplay` and restores the terminal on Ctrl+C, catchable termination signals, and error exits.
 
 The Python entry point also requires macOS and an interactive terminal. It discovers `afplay` on `PATH` or at `/usr/bin/afplay`; set `AFPLAY_PATH` for a custom executable. Playback completion clears the playing status automatically, and launch/runtime failures are shown in the UI. It refreshes the library before handling input and after completion, preserving selection by filename and safely handling empty lists.
 
@@ -54,7 +54,7 @@ I learned how to take full control of the terminal using Node.js! By enabling `p
 - `process.stdin.setRawMode(true)`: Grabbing raw keypresses right away without needing Enter.
 - ANSI Escape Codes: Cool string commands (like `\x1B[2J` or `\x1B[0K`) that tell the terminal to clear the screen or clear a line.
 - `child_process.spawn`: Spinning up external tools asynchronously (like running `vlc` for audio and `afinfo` for duration).
-- Process events & Signals: Managing the background VLC process, handling its completion/errors, using `SIGKILL` for replacement/cleanup, and sending RC commands for pause/resume.
+- Process events & Signals: Managing background VLC and metadata processes, handling completion/errors and application shutdown, using `SIGKILL` for replacement/cleanup, and sending RC commands for pause/resume.
 
 ### How It Relates to the Project
 These concepts are the core of the whole CLI music player. The raw mode and ANSI codes let me build the interactive menu that stays in one place. Meanwhile, spawning child processes handles the heavy lifting—VLC actually plays the music in the background while my Node script just acts as the remote control and UI.
@@ -77,7 +77,7 @@ To build an interactive CLI music player that reads songs from a folder and give
 - Next (`n`) and Previous (`b` / `d`) track controls relative to the playing song.
 - Automatic next-track playback with playlist wraparound, using VLC's `--play-and-exit` behavior.
 - A progress bar showing estimated elapsed time against the duration reported by `afinfo`.
-- Current-player cleanup when changing tracks or pressing Ctrl+C, with ownership checks for late process events.
+- Centralized child-process, timer, and terminal cleanup when changing tracks or exiting through Ctrl+C, stdin closure, signals, or fatal errors, with ownership checks for late process events.
 
 ### Concepts Used
 - `fs.readdirSync` to quickly grab all the songs from the local folder.

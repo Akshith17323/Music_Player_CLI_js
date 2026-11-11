@@ -1,6 +1,6 @@
 # CLI Music Player Architecture
 
-Verified against the current implementations on **2026-11-10**. Earlier architecture reviews are available in Git history.
+Verified against the current implementations on **2026-11-11**. Earlier architecture reviews are available in Git history.
 
 ## Repository layout
 
@@ -8,6 +8,7 @@ Verified against the current implementations on **2026-11-10**. Earlier architec
 | --- | --- |
 | `cli_player.js` | Main interactive player: keyboard input, playlist state, VLC lifecycle, metadata, and terminal rendering. |
 | `cli_player.py` | Earlier `afplay` prototype with arrow selection and Enter-to-play. |
+| `tests/test_shutdown.py` | Native-process shutdown regression tests for both players, using fake audio tools and pseudo-terminals. |
 | `songs/` | Fixed library directory adjacent to the entry points. |
 | `README.md` | Setup, controls, and learning notes. |
 | `ARCHITECTURE.md` | Current runtime design and verification. |
@@ -102,6 +103,8 @@ The JS entry point enables raw mode for TTY stdin and handles incoming data buff
 
 Input-buffer decoding and terminal resizing still need dedicated improvements. The Python prototype has its own simpler input loop and validates that stdin is a terminal. Its `finally` path now terminates and waits for `afplay`, escalates to `kill()` after a bounded timeout, and restores terminal settings. Signal handlers turn catchable termination signals into normal stack unwinding so that cleanup also runs on externally requested exits and unhandled runtime errors.
 
+Python defers signals received during `Popen()` until the returned child and track have been recorded. This prevents shutdown from leaving a just-launched process unowned. The first signal determines the exit code; further shutdown signals cannot interrupt cleanup. Neither player can run cleanup after an uncatchable signal such as `SIGKILL`.
+
 ## Playback flow
 
 ```mermaid
@@ -132,3 +135,5 @@ flowchart TD
 ## Verification
 
 Development verification through **2026-11-10** includes **17 JavaScript behavioral checks** and **9 Python pseudo-terminal checks** covering changing/empty libraries, selection and playback identity, completion, runtime failures, and replacement-player ownership. Native shutdown checks additionally confirmed that JS stops VLC and pending `afinfo` jobs on raw Ctrl+C, `SIGTERM`, and stdin EOF, while Python stops `afplay` and restores the terminal on raw Ctrl+C and `SIGTERM`. Earlier native VLC checks confirmed **A → B → A** despite conflicting playback preferences, and that an unreadable track stops with an error even when VLC exits successfully.
+
+On **2026-11-11**, `python3 -m unittest discover -s tests -v` passed **8 regression tests covering 20 native-process shutdown scenarios**. Coverage includes raw Ctrl+C, all four catchable shutdown signals, fatal runtime errors, JS stdin EOF and explicit process exit, Python kill escalation, repeated shutdown signals, and signals delivered between launching a Python child and recording ownership. Tests check that playback and pending metadata processes stop and that terminal settings are restored.

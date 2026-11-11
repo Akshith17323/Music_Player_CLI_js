@@ -9,6 +9,8 @@ SONGS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "songs")
 
 current_player = None
 current_playing_song = None
+player_launch_in_progress = False
+shutdown_signal = None
 PLAYER_STOP_TIMEOUT = 1.0
 
 
@@ -77,15 +79,21 @@ def stopPlayback():
 
 
 def playSong(song_name, player_command):
-    global current_player, current_playing_song
+    global current_player, current_playing_song, player_launch_in_progress
     stopPlayback()
     song_path = os.path.join(SONGS_DIR, song_name)
     # Use Popen instead of run so it doesn't block the UI
+    player_launch_in_progress = True
     try:
         current_player = subprocess.Popen([player_command, song_path])
+        current_playing_song = song_name
     except OSError as error:
         raise RuntimeError(f"Could not start afplay ({player_command}): {error}. Check AFPLAY_PATH and executable permissions.") from error
-    current_playing_song = song_name
+    finally:
+        player_launch_in_progress = False
+        # Record ownership before honoring a signal received during Popen.
+        if shutdown_signal is not None:
+            raise SystemExit(128 + shutdown_signal)
     return current_player
 
 
@@ -106,7 +114,13 @@ def pollPlayback():
 
 
 def shutdownForSignal(signum, _frame):
-    raise SystemExit(128 + signum)
+    global shutdown_signal
+    if shutdown_signal is not None:
+        return
+    shutdown_signal = signum
+    # Unwinding Popen before assignment could leave its child unowned.
+    if not player_launch_in_progress:
+        raise SystemExit(128 + signum)
 
 
 def cleanupApplication(fd, old_settings, termios):
@@ -126,6 +140,7 @@ def cleanupApplication(fd, old_settings, termios):
 
 
 def main():
+    global shutdown_signal
     if sys.platform != "darwin":
         print(f"Setup error: This player requires macOS and afplay; detected {sys.platform}.", file=sys.stderr)
         return 1
@@ -149,6 +164,7 @@ def main():
     old_settings = termios.tcgetattr(fd)
     handled_signals = [signal.SIGINT, signal.SIGTERM, signal.SIGHUP, signal.SIGQUIT]
     previous_signal_handlers = {signum: signal.getsignal(signum) for signum in handled_signals}
+    shutdown_signal = None
     for signum in handled_signals:
         signal.signal(signum, shutdownForSignal)
 

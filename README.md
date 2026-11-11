@@ -41,6 +41,16 @@ Playback failures stop the current track and display an error; select another so
 
 The Python entry point also requires macOS and an interactive terminal. It discovers `afplay` on `PATH` or at `/usr/bin/afplay`; set `AFPLAY_PATH` for a custom executable. Playback completion clears the playing status automatically, and launch/runtime failures are shown in the UI. It refreshes the library before handling input and after completion, preserving selection by filename and safely handling empty lists.
 
+### Shutdown Regression Tests
+
+Run on macOS with Python 3 and Node.js:
+
+```sh
+python3 -m unittest discover -s tests -v
+```
+
+The tests use isolated libraries and fake audio executables, so VLC is not required and no audio is played. They verify child termination and terminal restoration across normal, signal, error, and launch-time shutdown paths.
+
 See [ARCHITECTURE.md](ARCHITECTURE.md) for the current design, repository-root file roles, verified behavior, and known limitations. The [project PDF](CLI_Music_Player_Project_Report.pdf) and original diagram are historical development artifacts; earlier architecture reviews are available in Git history.
 
 ---

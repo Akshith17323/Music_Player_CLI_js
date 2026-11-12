@@ -2,6 +2,7 @@ const { accessSync, constants, readdirSync, statSync } = require("fs");
 const { delimiter, isAbsolute, join, resolve } = require("path");
 const { homedir } = require("os");
 const { spawn } = require("child_process");
+const { emitKeypressEvents } = require("readline");
 
 const songDir = join(__dirname, 'songs');
 let allSongs = null;
@@ -296,7 +297,7 @@ function skipSong(offset) {
 }
 
 function restoreTerminal() {
-    process.stdin.removeListener('data', handleInput);
+    process.stdin.removeListener('keypress', handleInput);
     process.stdin.removeListener('end', handleInputEnd);
     process.stdin.removeListener('close', handleInputEnd);
     process.stdin.removeListener('error', handleInputError);
@@ -355,53 +356,49 @@ function installShutdownHandlers() {
     process.once('exit', cleanupApplication);
 }
 
-function handleInput(data) {
-    // ctrl+c
-    if (data[0] === 0x03) {
+function handleInput(_character, key) {
+    // Ctrl+C also interrupts incomplete or unsupported escape sequences.
+    if (key.sequence.includes('\x03')) {
         shutdown(0);
         return;
     }
 
     if (refreshSongs()) listSongs();
 
-    if (data[0] === 0x1b) {
+    if (key.name === 'up' || key.name === 'down') {
         if (allSongs.length === 0) return;
-        if (data[1] === 0x5b) {
-            if (data[2] === 0x41) {
-                // up arrow key
-                cursor = ((cursor - 1) % allSongs.length); 
-                if (cursor < 0) {
-                    cursor += allSongs.length;
-                }
-            } else if (data[2] === 0x42) {
-                // down arrow key
-                cursor = (cursor + 1) % allSongs.length; 
+        if (key.name === 'up') {
+            cursor = ((cursor - 1) % allSongs.length);
+            if (cursor < 0) {
+                cursor += allSongs.length;
             }
+        } else {
+            cursor = (cursor + 1) % allSongs.length;
         }
         listSongs();
         return;
     }
 
-    // play next 'n' (110)
-    if (data[0] === 110) { 
+    // play next 'n'
+    if (key.sequence === 'n') {
         skipSong(1);
         return;
     }
 
-    // play previous 'b' (98) or 'd' (100)
-    if (data[0] === 98 || data[0] === 100) { 
+    // play previous 'b' or 'd'
+    if (key.sequence === 'b' || key.sequence === 'd') {
         skipSong(-1);
         return;
     }
 
-    // enter key
-    if (data[0] === 0x0d) {
+    // Enter: CR from raw terminals or LF from piped input.
+    if (key.sequence === '\r' || key.sequence === '\n') {
         playSong(cursor);
         return;
     }
 
-    // play/pause 'p' (112) or space (32)
-    if (data[0] === 112 || data[0] === 0x20) {
+    // play/pause 'p' or space
+    if (key.sequence === 'p' || key.sequence === ' ') {
         if (vlcPlayProcess !== undefined && !vlcPlayProcess.stdin.destroyed) {
             const currentProcess = vlcPlayProcess;
             try {
@@ -435,7 +432,8 @@ function main() {
         process.stdin.setRawMode(true);
         stdinRawModeConfigured = true;
     }
-    process.stdin.on('data', handleInput);
+    emitKeypressEvents(process.stdin);
+    process.stdin.on('keypress', handleInput);
     process.stdin.once('end', handleInputEnd);
     process.stdin.once('close', handleInputEnd);
     process.stdin.once('error', handleInputError);

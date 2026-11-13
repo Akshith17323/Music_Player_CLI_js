@@ -10,6 +10,7 @@ Verified against the current implementations on **2026-11-12**. Earlier architec
 | `cli_player.py` | Earlier `afplay` prototype with arrow selection and Enter-to-play. |
 | `tests/test_input.js` | Input-decoding regression tests using mocked streams and child processes; runnable with Node's built-in test runner. |
 | `tests/test_shutdown.py` | Native-process shutdown regression tests for both players, using fake audio tools and pseudo-terminals. |
+| `tests/test_library.py` | Library-access regression tests, including startup validation and runtime child/terminal cleanup in both players. |
 | `songs/` | Fixed library directory adjacent to the entry points. |
 | `README.md` | Setup, controls, and learning notes. |
 | `ARCHITECTURE.md` | Current runtime design and verification. |
@@ -39,6 +40,8 @@ JavaScript validates executable files with filesystem permission checks; Python 
 ### Library and selection
 
 `refreshSongs()` reads and sorts the adjacent `songs/` directory, filtering dot-prefixed entries. It runs at startup, before handling input or starting playback, and on active-player completion. Selection is preserved by filename, with a clamped fallback if that file disappears. `listSongs()` renders the current snapshot and clears the previous menu area.
+
+Both players read the library before initializing the UI. Missing, non-directory, unreadable, or otherwise inaccessible paths produce a setup error naming the folder and exit with status 1 without changing the terminal. A failed refresh during use reports a library error and exits through child-process and terminal cleanup rather than exposing a filesystem traceback.
 
 `cursor` is the highlighted selection; `playingSong` stores the active track's filename, or `undefined` when stopped. Playback identity is independent of the current directory listing.
 
@@ -142,3 +145,5 @@ Development verification through **2026-11-10** includes **17 JavaScript behavio
 On **2026-11-11**, `python3 -m unittest discover -s tests -v` passed **8 regression tests covering 20 native-process shutdown scenarios**. Coverage includes raw Ctrl+C, all four catchable shutdown signals, fatal runtime errors, JS stdin EOF and explicit process exit, Python kill escalation, repeated shutdown signals, and signals delivered between launching a Python child and recording ownership. Tests check that playback and pending metadata processes stop and that terminal settings are restored.
 
 On **2026-11-12**, `node --test tests/test_input.js` passed **19 input-decoding tests** covering batched commands, arrows fragmented at every byte boundary, application-mode arrows, pause shortcuts, unsupported/modified keys, Ctrl+C after other keys or during incomplete escape sequences, empty libraries, and newline Enter. The native suite passed **10 tests covering 23 shutdown scenarios**, adding batched Ctrl+C and newline-based playback followed by stdin EOF. `node --check cli_player.js` also passed.
+
+On **2026-11-13**, `python3 -m unittest discover -s tests -p 'test_library.py' -v` passed **8 tests covering 22 native-process scenarios** and Python scanner checks. Missing, non-directory, and unreadable folders fail before UI initialization; input and completion refresh failures stop owned children and restore terminal settings. Readable empty and hidden-only libraries continue to work. JavaScript and Python syntax checks also passed.

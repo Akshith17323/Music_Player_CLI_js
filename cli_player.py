@@ -14,6 +14,10 @@ shutdown_signal = None
 PLAYER_STOP_TIMEOUT = 1.0
 
 
+class SongLibraryError(RuntimeError):
+    pass
+
+
 def resolveAfplay():
     configured = os.environ.get("AFPLAY_PATH")
     candidates = [configured] if configured else ["afplay", "/usr/bin/afplay"]
@@ -27,7 +31,14 @@ def resolveAfplay():
 
 def refreshSongs(directory_path, songs, user_selection_index):
     selected_song = songs[user_selection_index] if 0 <= user_selection_index < len(songs) else None
-    refreshed_songs = sorted([f for f in os.listdir(directory_path) if not f.startswith('.')])
+    try:
+        refreshed_songs = sorted([f for f in os.listdir(directory_path) if not f.startswith('.')])
+    except OSError as error:
+        reason = error.strerror or str(error)
+        raise SongLibraryError(
+            f'Cannot read songs folder "{directory_path}": {reason}. '
+            'Ensure it exists, is a directory, and is readable.'
+        ) from error
     if selected_song in refreshed_songs:
         user_selection_index = refreshed_songs.index(selected_song)
     else:
@@ -146,6 +157,7 @@ def main():
         return 1
     try:
         player_command = resolveAfplay()
+        songs, user_selection_index = refreshSongs(SONGS_DIR, [], 0)
     except RuntimeError as error:
         print(f"Setup error: {error}", file=sys.stderr)
         return 1
@@ -156,9 +168,7 @@ def main():
     import tty
     import termios
 
-    user_selection_index = 0
     playback_error = None
-    songs, user_selection_index = refreshSongs(SONGS_DIR, [], user_selection_index)
     listSongs(songs, user_selection_index, current_playing_song)
     fd = sys.stdin.fileno()
     old_settings = termios.tcgetattr(fd)
@@ -202,6 +212,9 @@ def main():
                         user_selection_index = min(len(songs) - 1, user_selection_index + 1)
 
             listSongs(songs, user_selection_index, current_playing_song, playback_error)
+    except SongLibraryError as error:
+        print(f"Library error: {error}", file=sys.stderr)
+        return 1
     finally:
         # Do not let a second shutdown signal interrupt child and terminal cleanup.
         for signum in handled_signals:

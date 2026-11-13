@@ -22,6 +22,8 @@ node cli_player.js
 
 The library path is fixed relative to the script. Tracks automatically advance on completion and wrap from the last song to the first. An empty or hidden-only library displays a message and ignores playback/navigation requests.
 
+Both entry points require `songs/` to exist, be a directory, and be readable. Library setup errors report the path before clearing the screen or enabling raw mode. If the folder becomes unavailable during use, the player reports a library error, stops its child processes, restores the terminal, and exits with status 1.
+
 The sorted song list refreshes on input and track completion. Selection follows the same filename when available, otherwise it moves to a valid entry. Playback keeps its track identity even if that file is removed from the library; skipping and automatic advancement use the refreshed order.
 
 | Key | Action |
@@ -45,7 +47,7 @@ The Python entry point also requires macOS and an interactive terminal. It disco
 
 ### Regression Tests
 
-Run the input tests with Node.js 22 or later, and the native shutdown tests on macOS with Python 3 and Node.js:
+Run the input tests with Node.js 22 or later, and the native library/shutdown tests on macOS with Python 3 and Node.js:
 
 ```sh
 node --test tests/test_input.js
@@ -53,6 +55,8 @@ python3 -m unittest discover -s tests -v
 ```
 
 The tests use mocked streams, isolated libraries, and fake audio executables, so VLC is not required and no audio is played. They verify batched keys, fragmented arrows, newline Enter, and child termination and terminal restoration across normal, signal, error, and launch-time shutdown paths.
+
+`tests/test_library.py` also checks missing, non-directory, and unreadable folders before startup and during input/completion refreshes, plus readable empty and hidden-only libraries.
 
 See [ARCHITECTURE.md](ARCHITECTURE.md) for the current design, repository-root file roles, verified behavior, and known limitations. The [project PDF](CLI_Music_Player_Project_Report.pdf) and original diagram are historical development artifacts; earlier architecture reviews are available in Git history.
 

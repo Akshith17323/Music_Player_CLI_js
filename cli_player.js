@@ -22,6 +22,18 @@ let shutdownStarted = false;
 let applicationCleanedUp = false;
 let shutdownHandlersInstalled = false;
 
+class SongLibraryError extends Error {
+    constructor(error) {
+        const reason = {
+            ENOENT: 'folder does not exist',
+            ENOTDIR: 'path is not a directory',
+            EACCES: 'permission denied',
+            EPERM: 'permission denied'
+        }[error.code] || error.message;
+        super(`Cannot read songs folder "${songDir}": ${reason}. Ensure it exists, is a directory, and is readable.`);
+    }
+}
+
 function findExecutable(command) {
     const expanded = command.startsWith('~/') ? join(homedir(), command.slice(2)) : command;
     const candidates = isAbsolute(expanded) || expanded.includes('/')
@@ -154,13 +166,32 @@ function renderBar(percentagePlayed) {
 
 function refreshSongs() {
     const selectedSong = allSongs?.[cursor];
-    const songs = readdirSync(songDir).filter(file => !file.startsWith('.')).sort();
+    let songs;
+    try {
+        songs = readdirSync(songDir).filter(file => !file.startsWith('.')).sort();
+    } catch (error) {
+        throw new SongLibraryError(error);
+    }
     const changed = allSongs === null || songs.length !== allSongs.length || songs.some((song, index) => song !== allSongs[index]);
     allSongs = songs;
 
     const selectedIndex = allSongs.indexOf(selectedSong);
     cursor = selectedIndex !== -1 ? selectedIndex : Math.max(0, Math.min(cursor, allSongs.length - 1));
     return changed;
+}
+
+function refreshSongsOrShutdown() {
+    try {
+        return refreshSongs();
+    } catch (error) {
+        if (!(error instanceof SongLibraryError)) throw error;
+        try {
+            process.stderr.write(`Library error: ${error.message}\n`);
+        } finally {
+            shutdown(1);
+        }
+        return null;
+    }
 }
 
 function listSongs() {
@@ -197,7 +228,7 @@ function showPlaybackError(message) {
 
 function playSong(targetCursor) {
     const songName = allSongs?.[targetCursor];
-    refreshSongs();
+    if (refreshSongsOrShutdown() === null) return;
     const targetIndex = allSongs.indexOf(songName);
     if (!Number.isInteger(targetCursor) || targetIndex === -1) {
         listSongs();
@@ -263,7 +294,7 @@ function playSong(targetCursor) {
 
         vlcPlayProcess = undefined;
         stopPlayback();
-        refreshSongs();
+        if (refreshSongsOrShutdown() === null) return;
         listSongs();
 
         if (code === 0 && !signal && !playbackFailed) {
@@ -363,7 +394,9 @@ function handleInput(_character, key) {
         return;
     }
 
-    if (refreshSongs()) listSongs();
+    const songsChanged = refreshSongsOrShutdown();
+    if (songsChanged === null) return;
+    if (songsChanged) listSongs();
 
     if (key.name === 'up' || key.name === 'down') {
         if (allSongs.length === 0) return;
@@ -416,6 +449,7 @@ function handleInput(_character, key) {
 function main() {
     try {
         executables = configureExecutables();
+        refreshSongs();
     } catch (error) {
         process.stderr.write(`Setup error: ${error.message}\n`);
         process.exitCode = 1;
@@ -425,7 +459,6 @@ function main() {
     installShutdownHandlers();
 
     process.stdout.write('\x1b[2J');
-    refreshSongs();
     listSongs();
     if (process.stdin.isTTY) {
         previousStdinRawMode = Boolean(process.stdin.isRaw);

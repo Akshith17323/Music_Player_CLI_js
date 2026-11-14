@@ -4,6 +4,7 @@ import select
 import signal
 import shutil
 import sys
+import time
 
 SONGS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "songs")
 
@@ -12,10 +13,70 @@ current_playing_song = None
 player_launch_in_progress = False
 shutdown_signal = None
 PLAYER_STOP_TIMEOUT = 1.0
+ESCAPE_TIMEOUT = 0.05
+MAX_ESCAPE_SEQUENCE_LENGTH = 64
 
 
 class SongLibraryError(RuntimeError):
     pass
+
+
+class KeyDecoder:
+    """Buffer escape sequences without reading ahead or consuming command keys."""
+
+    def __init__(self, clock=time.monotonic):
+        self._clock = clock
+        self._pending = b''
+        self._deadline = None
+
+    def _reset(self):
+        self._pending = b''
+        self._deadline = None
+
+    def expire(self):
+        if self._deadline is not None and self._clock() >= self._deadline:
+            self._reset()
+
+    def timeout(self):
+        if self._deadline is None:
+            return None
+        return max(0.0, self._deadline - self._clock())
+
+    def feed(self, data):
+        self.expire()
+        keys = []
+        for value in data:
+            char = bytes([value])
+            if char == b'\x1b':
+                self._pending = char
+            elif not self._pending:
+                keys.append(char)
+                continue
+            elif char < b' ' or char > b'~':
+                # Enter and Ctrl+C interrupt even an incomplete escape sequence.
+                self._reset()
+                keys.append(char)
+                continue
+            elif self._pending == b'\x1b':
+                if char not in (b'[', b'O'):
+                    self._reset()
+                    keys.append(char)
+                    continue
+                self._pending += char
+            elif b'@' <= char <= b'~':
+                sequence = self._pending + char
+                self._reset()
+                if sequence in (b'\x1b[A', b'\x1b[B', b'\x1bOA', b'\x1bOB'):
+                    keys.append(sequence)
+                continue
+            else:
+                self._pending += char
+                if len(self._pending) >= MAX_ESCAPE_SEQUENCE_LENGTH:
+                    self._reset()
+                    continue
+            # Limit the wait between fragments, not the total sequence time.
+            self._deadline = self._clock() + ESCAPE_TIMEOUT
+        return keys
 
 
 def resolveAfplay():
@@ -169,6 +230,7 @@ def main():
     import termios
 
     playback_error = None
+    input_decoder = KeyDecoder()
     listSongs(songs, user_selection_index, current_playing_song)
     fd = sys.stdin.fileno()
     old_settings = termios.tcgetattr(fd)
@@ -187,31 +249,34 @@ def main():
                 songs, user_selection_index = refreshSongs(SONGS_DIR, songs, user_selection_index)
                 listSongs(songs, user_selection_index, current_playing_song, playback_error)
 
-            readable, _, _ = select.select([fd], [], [], 0.1 if current_player is not None else None)
+            timeout = 0.1 if current_player is not None else None
+            escape_timeout = input_decoder.timeout()
+            if escape_timeout is not None:
+                timeout = escape_timeout if timeout is None else min(timeout, escape_timeout)
+            readable, _, _ = select.select([fd], [], [], timeout)
             if not readable:
+                input_decoder.expire()
                 continue
-            char = os.read(fd, 1)
-            if char in (b'\x03', b''): # Ctrl+C or end of input
+            data = os.read(fd, 4096)
+            if not data: # End of input
                 return 0
 
-            songs, user_selection_index = refreshSongs(SONGS_DIR, songs, user_selection_index)
-            if char in (b'\r', b'\n') and songs:
-                try:
-                    playSong(songs[user_selection_index], player_command)
-                    playback_error = None
-                except RuntimeError as error:
-                    playback_error = str(error)
+            for char in input_decoder.feed(data):
+                if char == b'\x03': # Ctrl+C
+                    return 0
+                songs, user_selection_index = refreshSongs(SONGS_DIR, songs, user_selection_index)
+                if char in (b'\r', b'\n') and songs:
+                    try:
+                        playSong(songs[user_selection_index], player_command)
+                        playback_error = None
+                    except RuntimeError as error:
+                        playback_error = str(error)
+                elif char in (b'\x1b[A', b'\x1bOA'): # Up Key
+                    user_selection_index = max(0, user_selection_index - 1)
+                elif char in (b'\x1b[B', b'\x1bOB') and songs: # Down Key
+                    user_selection_index = min(len(songs) - 1, user_selection_index + 1)
 
-            if char == b'\x1b':
-                next_char = os.read(fd, 1)
-                if next_char == b'[':
-                    arrow_char = os.read(fd, 1)
-                    if arrow_char == b'A': # Up Key
-                        user_selection_index = max(0, user_selection_index - 1)
-                    elif arrow_char == b'B' and songs: # Down Key
-                        user_selection_index = min(len(songs) - 1, user_selection_index + 1)
-
-            listSongs(songs, user_selection_index, current_playing_song, playback_error)
+                listSongs(songs, user_selection_index, current_playing_song, playback_error)
     except SongLibraryError as error:
         print(f"Library error: {error}", file=sys.stderr)
         return 1

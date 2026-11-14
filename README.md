@@ -45,6 +45,8 @@ Playback failures stop the current track and display an error; select another so
 
 The Python entry point also requires macOS and an interactive terminal. It discovers `afplay` on `PATH` or at `/usr/bin/afplay`; set `AFPLAY_PATH` for a custom executable. Playback completion clears the playing status automatically, and launch/runtime failures are shown in the UI. It refreshes the library before handling input and after completion, preserving selection by filename and safely handling empty lists.
 
+Python buffers normal and application-mode arrows across input chunks. Standalone or incomplete Escape sequences expire after 50 ms without another byte; Enter and Ctrl+C are handled independently, even during an incomplete sequence.
+
 ### Regression Tests
 
 Run the input tests with Node.js 22 or later, and the native library/shutdown tests on macOS with Python 3 and Node.js:
@@ -54,7 +56,7 @@ node --test tests/test_input.js
 python3 -m unittest discover -s tests -v
 ```
 
-The tests use mocked streams, isolated libraries, and fake audio executables, so VLC is not required and no audio is played. They verify batched keys, fragmented arrows, newline Enter, and child termination and terminal restoration across normal, signal, error, and launch-time shutdown paths.
+The tests use mocked streams, isolated libraries, and fake audio executables, so VLC is not required and no audio is played. They verify batched keys, fragmented arrows, standalone and interrupted Escape sequences, newline Enter, and child termination and terminal restoration across normal, signal, error, and launch-time shutdown paths. `tests/test_python_input.py` also checks that Escape does not block playback-completion updates.
 
 `tests/test_library.py` also checks missing, non-directory, and unreadable folders before startup and during input/completion refreshes, plus readable empty and hidden-only libraries.
 

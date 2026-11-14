@@ -1,6 +1,6 @@
 # CLI Music Player Architecture
 
-Verified against the current implementations on **2026-11-12**. Earlier architecture reviews are available in Git history.
+Verified against the current implementations on **2026-11-14**. Earlier architecture reviews are available in Git history.
 
 ## Repository layout
 
@@ -9,6 +9,7 @@ Verified against the current implementations on **2026-11-12**. Earlier architec
 | `cli_player.js` | Main interactive player: keyboard input, playlist state, VLC lifecycle, metadata, and terminal rendering. |
 | `cli_player.py` | Earlier `afplay` prototype with arrow selection and Enter-to-play. |
 | `tests/test_input.js` | Input-decoding regression tests using mocked streams and child processes; runnable with Node's built-in test runner. |
+| `tests/test_python_input.py` | Python input-decoder checks with a deterministic clock and native pseudo-terminal regressions using fake `afplay`. |
 | `tests/test_shutdown.py` | Native-process shutdown regression tests for both players, using fake audio tools and pseudo-terminals. |
 | `tests/test_library.py` | Library-access regression tests, including startup validation and runtime child/terminal cleanup in both players. |
 | `songs/` | Fixed library directory adjacent to the entry points. |
@@ -107,7 +108,9 @@ The JS entry point enables raw mode for TTY stdin and uses `readline.emitKeypres
 
 One idempotent application-cleanup path stops the timer, kills every owned VLC/`afinfo` child, removes input listeners, and restores the prior terminal mode. Raw Ctrl+C, stdin end/close, `SIGHUP`, `SIGINT`, `SIGQUIT`, and `SIGTERM` use this path. The process `exit` and `uncaughtExceptionMonitor` hooks provide final synchronous cleanup without suppressing Node's fatal-error reporting.
 
-Terminal resizing still needs dedicated improvements. The Python prototype has its own simpler input loop and validates that stdin is a terminal; its Escape handling still uses blocking byte reads. Its `finally` path now terminates and waits for `afplay`, escalates to `kill()` after a bounded timeout, and restores terminal settings. Signal handlers turn catchable termination signals into normal stack unwinding so that cleanup also runs on externally requested exits and unhandled runtime errors.
+The Python prototype validates that stdin is a terminal and feeds raw input chunks into `KeyDecoder`. Normal (`ESC [ A/B`) and application-mode (`ESC O A/B`) arrows can span reads, with a 50 ms monotonic timeout between fragments. The main `select()` wait respects this deadline and the playback-polling interval, so standalone or incomplete Escape sequences expire without blocking completion updates. Enter and Ctrl+C interrupt incomplete sequences and are handled independently; unsupported escape sequences are ignored.
+
+Terminal resizing still needs dedicated improvements. Python's `finally` path terminates and waits for `afplay`, escalates to `kill()` after a bounded timeout, and restores terminal settings. Signal handlers turn catchable termination signals into normal stack unwinding so that cleanup also runs on externally requested exits and unhandled runtime errors.
 
 Python defers signals received during `Popen()` until the returned child and track have been recorded. This prevents shutdown from leaving a just-launched process unowned. The first signal determines the exit code; further shutdown signals cannot interrupt cleanup. Neither player can run cleanup after an uncatchable signal such as `SIGKILL`.
 
@@ -147,3 +150,5 @@ On **2026-11-11**, `python3 -m unittest discover -s tests -v` passed **8 regress
 On **2026-11-12**, `node --test tests/test_input.js` passed **19 input-decoding tests** covering batched commands, arrows fragmented at every byte boundary, application-mode arrows, pause shortcuts, unsupported/modified keys, Ctrl+C after other keys or during incomplete escape sequences, empty libraries, and newline Enter. The native suite passed **10 tests covering 23 shutdown scenarios**, adding batched Ctrl+C and newline-based playback followed by stdin EOF. `node --check cli_player.js` also passed.
 
 On **2026-11-13**, `python3 -m unittest discover -s tests -p 'test_library.py' -v` passed **8 tests covering 22 native-process scenarios** and Python scanner checks. Missing, non-directory, and unreadable folders fail before UI initialization; input and completion refresh failures stop owned children and restore terminal settings. Readable empty and hidden-only libraries continue to work. JavaScript and Python syntax checks also passed.
+
+On **2026-11-14**, `python3 -m unittest discover -s tests -v` passed **26 tests**, including **18 Python input regressions**. Deterministic decoder checks and pseudo-terminal scenarios cover standalone/expired Escape, Enter and Ctrl+C during incomplete sequences, batched keys, fragmented normal/application-mode arrows, empty libraries, playback-completion polling, child termination, and terminal restoration.

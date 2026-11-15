@@ -20,7 +20,9 @@ Place audio files in the repository's `songs/` folder, then run:
 node cli_player.js
 ```
 
-The library path is fixed relative to the script. Tracks automatically advance on completion and wrap from the last song to the first. An empty or hidden-only library displays a message and ignores playback/navigation requests.
+The library path is fixed relative to the script. Tracks automatically advance on completion and wrap from the last song to the first. A library with no eligible audio files displays a message and ignores playback/navigation requests.
+
+Both players accept these audio extensions (case-insensitive): `.mp3`, `.m4a`, `.aac`, `.wav`, `.aif`, `.aiff`, `.aifc`, `.caf`, `.flac`, `.ogg`, `.oga`, and `.opus`. Entries must be non-hidden, readable regular files. Directories, playlists, other file types, broken links, and inaccessible entries are ignored; symlinks are accepted only when their targets are readable regular files. Scanning does not decode audio: corrupt or mislabeled files with an accepted extension are handled as playback errors by the audio backend. Codec support depends on the backend and macOS version.
 
 Both entry points require `songs/` to exist, be a directory, and be readable. Library setup errors report the path before clearing the screen or enabling raw mode. If the folder becomes unavailable during use, the player reports a library error, stops its child processes, restores the terminal, and exits with status 1.
 
@@ -49,16 +51,18 @@ Python buffers normal and application-mode arrows across input chunks. Standalon
 
 ### Regression Tests
 
-Run the input tests with Node.js 22 or later, and the native library/shutdown tests on macOS with Python 3 and Node.js:
+Run the JavaScript tests with Node.js 22 or later, and the native library/shutdown tests on macOS with Python 3 and Node.js:
 
 ```sh
-node --test tests/test_input.js
+node --test tests/*.js
 python3 -m unittest discover -s tests -v
 ```
 
 The tests use mocked streams, isolated libraries, and fake audio executables, so VLC is not required and no audio is played. They verify batched keys, fragmented arrows, standalone and interrupted Escape sequences, newline Enter, and child termination and terminal restoration across normal, signal, error, and launch-time shutdown paths. `tests/test_python_input.py` also checks that Escape does not block playback-completion updates.
 
-`tests/test_library.py` also checks missing, non-directory, and unreadable folders before startup and during input/completion refreshes, plus readable empty and hidden-only libraries.
+`tests/test_library.py` also checks missing, non-directory, and unreadable folders before startup and during input/completion refreshes, plus mixed and invalid-only libraries, supported extensions, symlinks, per-entry access failures, changing file types, and decoding errors. `tests/test_media.js` checks JavaScript filtering, selection, playback revalidation, automatic advancement, and decoding-error recovery with mocked files and child processes.
+
+Run just the library checks with `python3 -m unittest discover -s tests -p 'test_library.py' -v`.
 
 See [ARCHITECTURE.md](ARCHITECTURE.md) for the current design, repository-root file roles, verified behavior, and known limitations. The [project PDF](CLI_Music_Player_Project_Report.pdf) and original diagram are historical development artifacts; earlier architecture reviews are available in Git history.
 

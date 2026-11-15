@@ -1,6 +1,6 @@
 # CLI Music Player Architecture
 
-Verified against the current implementations on **2026-11-14**. Earlier architecture reviews are available in Git history.
+Verified against the current implementations on **2026-11-15**. Earlier architecture reviews are available in Git history.
 
 ## Repository layout
 
@@ -12,6 +12,7 @@ Verified against the current implementations on **2026-11-14**. Earlier architec
 | `tests/test_python_input.py` | Python input-decoder checks with a deterministic clock and native pseudo-terminal regressions using fake `afplay`. |
 | `tests/test_shutdown.py` | Native-process shutdown regression tests for both players, using fake audio tools and pseudo-terminals. |
 | `tests/test_library.py` | Library-access regression tests, including startup validation and runtime child/terminal cleanup in both players. |
+| `tests/test_media.js` | JavaScript media-filtering, playback-selection, advancement, and decoding-error regressions with mocked files and child processes. |
 | `songs/` | Fixed library directory adjacent to the entry points. |
 | `README.md` | Setup, controls, and learning notes. |
 | `ARCHITECTURE.md` | Current runtime design and verification. |
@@ -40,7 +41,9 @@ JavaScript validates executable files with filesystem permission checks; Python 
 
 ### Library and selection
 
-`refreshSongs()` reads and sorts the adjacent `songs/` directory, filtering dot-prefixed entries. It runs at startup, before handling input or starting playback, and on active-player completion. Selection is preserved by filename, with a clamped fallback if that file disappears. `listSongs()` renders the current snapshot and clears the previous menu area.
+`refreshSongs()` reads the adjacent `songs/` directory, filters entries through `isPlayableSong()`, and sorts the result. Both players require a non-hidden filename with a supported audio extension, a regular-file target, and read access. Extension checks are case-insensitive. Symlinks to readable regular files are accepted; directories, special files, broken links, and unsupported extensions are skipped. Per-entry filesystem errors, including files removed during a scan, do not abort the library refresh.
+
+Refreshing runs at startup, before handling input or starting playback, and on active-player completion. Selection is preserved by filename, with a clamped fallback if that file disappears or becomes ineligible. `listSongs()` renders the current snapshot and clears the previous menu area.
 
 Both players read the library before initializing the UI. Missing, non-directory, unreadable, or otherwise inaccessible paths produce a setup error naming the folder and exit with status 1 without changing the terminal. A failed refresh during use reports a library error and exits through child-process and terminal cleanup rather than exposing a filesystem traceback.
 
@@ -53,7 +56,7 @@ Both players read the library before initializing the UI. Missing, non-directory
 - If the active track leaves the library, it can finish playing; next/previous uses its filename's position in the refreshed sorted order.
 - Empty libraries show a message and disable playback/navigation arithmetic.
 
-There is no command-line library-path argument, and file-type/access validation is still limited.
+There is no command-line library-path argument. The supported extension list is documented in the README. Scanning validates filenames, file type, and readability without decoding every file; a corrupt or mislabeled file with an accepted extension can still be listed, but playback failures are reported by the backend handlers rather than triggering automatic retries. Codec support depends on the backend and macOS version.
 
 The Python prototype refreshes its directory listing before handling input and after playback completion. It preserves the selected filename when available, otherwise clamps the selection to the refreshed list, and skips playback requests when the list is empty. This also handles hidden-only libraries and a library becoming empty during use.
 
@@ -152,3 +155,7 @@ On **2026-11-12**, `node --test tests/test_input.js` passed **19 input-decoding 
 On **2026-11-13**, `python3 -m unittest discover -s tests -p 'test_library.py' -v` passed **8 tests covering 22 native-process scenarios** and Python scanner checks. Missing, non-directory, and unreadable folders fail before UI initialization; input and completion refresh failures stop owned children and restore terminal settings. Readable empty and hidden-only libraries continue to work. JavaScript and Python syntax checks also passed.
 
 On **2026-11-14**, `python3 -m unittest discover -s tests -v` passed **26 tests**, including **18 Python input regressions**. Deterministic decoder checks and pseudo-terminal scenarios cover standalone/expired Escape, Enter and Ctrl+C during incomplete sequences, batched keys, fragmented normal/application-mode arrows, empty libraries, playback-completion polling, child termination, and terminal restoration.
+
+On **2026-11-15**, the missing `tests/test_library.py` suite was added to the repository. Its **8 tests** cover **22 native-process scenarios** and Python scanner checks; all six startup-error scenarios fail against the pre-fix revision. The full Python suite passes **34 tests**, and `node --check cli_player.js` passes. No additional runtime changes were needed for library-access error handling.
+
+Later on **2026-11-15**, media eligibility filtering was added to both players for B12. The library suite passes **16 tests covering 30 native-process scenarios** and Python scanner checks, and `node --test tests/test_media.js` passes **10 JavaScript regressions**. The full Python suite passes **42 tests**. Coverage includes mixed and invalid-only libraries, case-insensitive extensions, readable file symlinks, broken/directory links, special files, unreadable entries, scan races, changing file types, safe advancement, and decoding failures without automatic retry. Syntax and whitespace checks also pass.

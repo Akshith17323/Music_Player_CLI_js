@@ -7,6 +7,10 @@ import sys
 import time
 
 SONGS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "songs")
+SUPPORTED_AUDIO_EXTENSIONS = {
+    '.mp3', '.m4a', '.aac', '.wav', '.aif', '.aiff',
+    '.aifc', '.caf', '.flac', '.ogg', '.oga', '.opus',
+}
 
 current_player = None
 current_playing_song = None
@@ -90,16 +94,28 @@ def resolveAfplay():
     raise RuntimeError(f"afplay{location} was not found or is not executable. Set AFPLAY_PATH to its executable path.")
 
 
+def isPlayableSong(directory_path, filename):
+    if filename.startswith('.') or os.path.splitext(filename)[1].lower() not in SUPPORTED_AUDIO_EXTENSIONS:
+        return False
+    file_path = os.path.join(directory_path, filename)
+    try:
+        return os.path.isfile(file_path) and os.access(file_path, os.R_OK)
+    except OSError:
+        # Ignore inaccessible entries and files removed during the scan.
+        return False
+
+
 def refreshSongs(directory_path, songs, user_selection_index):
     selected_song = songs[user_selection_index] if 0 <= user_selection_index < len(songs) else None
     try:
-        refreshed_songs = sorted([f for f in os.listdir(directory_path) if not f.startswith('.')])
+        entries = os.listdir(directory_path)
     except OSError as error:
         reason = error.strerror or str(error)
         raise SongLibraryError(
             f'Cannot read songs folder "{directory_path}": {reason}. '
             'Ensure it exists, is a directory, and is readable.'
         ) from error
+    refreshed_songs = sorted(f for f in entries if isPlayableSong(directory_path, f))
     if selected_song in refreshed_songs:
         user_selection_index = refreshed_songs.index(selected_song)
     else:

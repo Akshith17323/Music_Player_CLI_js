@@ -1,10 +1,14 @@
 const { accessSync, constants, readdirSync, statSync } = require("fs");
-const { delimiter, isAbsolute, join, resolve } = require("path");
+const { delimiter, extname, isAbsolute, join, resolve } = require("path");
 const { homedir } = require("os");
 const { spawn } = require("child_process");
 const { emitKeypressEvents } = require("readline");
 
 const songDir = join(__dirname, 'songs');
+const supportedAudioExtensions = new Set([
+    '.mp3', '.m4a', '.aac', '.wav', '.aif', '.aiff',
+    '.aifc', '.caf', '.flac', '.ogg', '.oga', '.opus'
+]);
 let allSongs = null;
 let cursor = 0;
 let isPaused = true;
@@ -164,14 +168,28 @@ function renderBar(percentagePlayed) {
     return progressBar;
 }
 
+function isPlayableSong(fileName) {
+    if (fileName.startsWith('.') || !supportedAudioExtensions.has(extname(fileName).toLowerCase())) return false;
+    const filePath = join(songDir, fileName);
+    try {
+        if (!statSync(filePath).isFile()) return false;
+        accessSync(filePath, constants.R_OK);
+        return true;
+    } catch {
+        // Ignore inaccessible entries and files removed during the scan.
+        return false;
+    }
+}
+
 function refreshSongs() {
     const selectedSong = allSongs?.[cursor];
     let songs;
     try {
-        songs = readdirSync(songDir).filter(file => !file.startsWith('.')).sort();
+        songs = readdirSync(songDir);
     } catch (error) {
         throw new SongLibraryError(error);
     }
+    songs = songs.filter(isPlayableSong).sort();
     const changed = allSongs === null || songs.length !== allSongs.length || songs.some((song, index) => song !== allSongs[index]);
     allSongs = songs;
 

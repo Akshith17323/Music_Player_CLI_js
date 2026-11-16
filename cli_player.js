@@ -5,6 +5,7 @@ const { spawn } = require("child_process");
 const { emitKeypressEvents } = require("readline");
 
 const songDir = join(__dirname, 'songs');
+const metadataTimeoutMs = 5000;
 const supportedAudioExtensions = new Set([
     '.mp3', '.m4a', '.aac', '.wav', '.aif', '.aiff',
     '.aifc', '.caf', '.flac', '.ogg', '.oga', '.opus'
@@ -108,7 +109,11 @@ async function getSongDuration(songFilePath) {
         const fail = error => reject(executableFailure('afinfo', 'AFINFO_PATH', error));
         let afinfoCP;
         try {
-            afinfoCP = ownChildProcess(spawn(executables.afinfo, [songFilePath], { stdio: ['ignore', 'pipe', 'ignore'] }));
+            afinfoCP = ownChildProcess(spawn(executables.afinfo, [songFilePath], {
+                stdio: ['ignore', 'pipe', 'ignore'],
+                timeout: metadataTimeoutMs,
+                killSignal: 'SIGKILL'
+            }));
         } catch (error) {
             fail(error);
             return;
@@ -150,13 +155,20 @@ function startElapsedTracking() {
         }
         updateProgress();
     }, 100);
+    updateProgress();
 }
 
 function updateProgress() {
-    if (timeElapsed !== undefined && totalDuration !== undefined && allSongs !== null && playingSong !== undefined) {
+    if (timeElapsed !== undefined && allSongs !== null && playingSong !== undefined) {
+        process.stdout.write(`\x1B[${allSongs.length + 2};1H\r\x1B[0K${isPaused ? 'Paused' : 'Playing'}: ${playingSong}`);
+        if (!Number.isFinite(totalDuration) || totalDuration <= 0) {
+            const durationStatus = totalDuration === undefined ? 'Looking up duration...' : 'Duration unavailable';
+            process.stdout.write(`\n\x1B[0K${Math.ceil(timeElapsed)} / ? || ${durationStatus}`);
+            process.stdout.write('\n\x1B[0K\n');
+            return;
+        }
         const percentagePlayed = Math.min(100, ((timeElapsed / totalDuration) * 100).toFixed(2));
         const bar = renderBar(percentagePlayed);
-        process.stdout.write(`\x1B[${allSongs.length + 2};1H\r\x1B[0KPlaying: ${playingSong}`);
         process.stdout.write(`\n\x1B[0K${Math.ceil(timeElapsed)} / ${totalDuration} || ${percentagePlayed} %`);
         process.stdout.write(`\n\x1B[0K${bar}\n`);
     }
@@ -304,6 +316,7 @@ function playSong(targetCursor) {
     getSongDuration(songFinalPath).then(duration => {
         if (vlcPlayProcess === currentProcess) {
             totalDuration = duration;
+            updateProgress();
         }
     }).catch(handlePlayerError);
 
@@ -454,7 +467,10 @@ function handleInput(_character, key) {
             const currentProcess = vlcPlayProcess;
             try {
                 currentProcess.stdin.write('pause\n');
-                if (vlcPlayProcess === currentProcess) isPaused = !isPaused;
+                if (vlcPlayProcess === currentProcess) {
+                    isPaused = !isPaused;
+                    updateProgress();
+                }
             } catch (error) {
                 if (vlcPlayProcess !== currentProcess) return;
                 stopPlayback();

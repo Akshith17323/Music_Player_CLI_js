@@ -3,6 +3,7 @@ const { delimiter, extname, isAbsolute, join, resolve } = require("path");
 const { homedir } = require("os");
 const { spawn } = require("child_process");
 const { emitKeypressEvents } = require("readline");
+const { performance } = require("perf_hooks");
 
 const songDir = join(__dirname, 'songs');
 const metadataTimeoutMs = 5000;
@@ -143,10 +144,10 @@ async function getSongDuration(songFilePath) {
 
 function startElapsedTracking() {
     timeElapsed = 0;
-    let lastTickTime = Date.now();
+    let lastTickTime = performance.now();
     if (trackingInterval) clearInterval(trackingInterval);
     trackingInterval = setInterval(() => {
-        const now = Date.now();
+        const now = performance.now();
         const delta = (now - lastTickTime) / 1000;
         lastTickTime = now;
         
@@ -167,7 +168,9 @@ function updateProgress() {
             process.stdout.write('\n\x1B[0K\n');
             return;
         }
-        const percentagePlayed = Math.min(100, ((timeElapsed / totalDuration) * 100).toFixed(2));
+        const percentagePlayed = Number.isFinite(timeElapsed)
+            ? Math.max(0, Math.min(100, ((timeElapsed / totalDuration) * 100).toFixed(2)))
+            : 0;
         const bar = renderBar(percentagePlayed);
         process.stdout.write(`\n\x1B[0K${Math.ceil(timeElapsed)} / ${totalDuration} || ${percentagePlayed} %`);
         process.stdout.write(`\n\x1B[0K${bar}\n`);
@@ -175,6 +178,7 @@ function updateProgress() {
 }
 
 function renderBar(percentagePlayed) {
+    percentagePlayed = Number.isFinite(percentagePlayed) ? Math.max(0, Math.min(100, percentagePlayed)) : 0;
     const playedCharC = Math.round(50 * (percentagePlayed) / 100);
     const progressBar = "X".repeat(playedCharC) + ".".repeat(50 - playedCharC);
     return progressBar;

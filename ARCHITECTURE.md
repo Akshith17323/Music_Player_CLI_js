@@ -1,6 +1,6 @@
 # CLI Music Player Architecture
 
-Verified against the current implementations on **2026-11-16**. Earlier architecture reviews are available in Git history.
+Verified against the current implementations on **2026-11-17**. Earlier architecture reviews are available in Git history.
 
 ## Repository layout
 
@@ -14,6 +14,7 @@ Verified against the current implementations on **2026-11-16**. Earlier architec
 | `tests/test_library.py` | Library-access regression tests, including startup validation and runtime child/terminal cleanup in both players. |
 | `tests/test_media.js` | JavaScript media-filtering, playback-selection, advancement, and decoding-error regressions with mocked files and child processes. |
 | `tests/test_metadata.js` | Metadata timeout, playback-status, unknown-duration, and ownership regressions, including a real hung subprocess. |
+| `tests/test_progress.js` | Controlled-clock regressions for elapsed tracking, pause/resume, resets, and bounded progress rendering. |
 | `songs/` | Fixed library directory adjacent to the entry points. |
 | `README.md` | Setup, controls, and learning notes. |
 | `ARCHITECTURE.md` | Current runtime design and verification. |
@@ -102,11 +103,11 @@ Python catches `afplay` launch failures, clears the failed playback state, displ
 
 `getSongDuration()` runs asynchronously after VLC has been spawned. Playback does not wait for metadata. The `afinfo` child uses Node's `spawn()` timeout of five seconds with `SIGKILL`, so a hung lookup is terminated without stopping VLC. Timed-out or unsuccessful lookups leave duration unavailable. Replacement and shutdown still kill owned metadata children. Results are applied only if the requesting player is still current.
 
-`startElapsedTracking()` runs a 100 ms interval. It measures `Date.now()` differences and adds them while a player exists and the local pause flag is false. `updateProgress()` renders the current filename, playing/paused state, and elapsed time independently of metadata. It redraws immediately at playback start, on pause/resume, and when metadata arrives, as well as on timer ticks and menu refreshes.
+`startElapsedTracking()` runs a 100 ms interval. It measures monotonic `performance.now()` differences, unaffected by system-clock changes, and adds them while a player exists and the local pause flag is false. `updateProgress()` renders the current filename, playing/paused state, and elapsed time independently of metadata. It redraws immediately at playback start, on pause/resume, and when metadata arrives, as well as on timer ticks and menu refreshes.
 
-Pending duration shows `?` and `Looking up duration...`; failed, non-finite, or non-positive duration shows `?` and `Duration unavailable`. Both states clear the previous progress bar and omit the percentage. With a finite positive duration, the UI renders elapsed/total time and a 50-character bar, with an upper percentage cap of 100.
+Pending duration shows `?` and `Looking up duration...`; failed, non-finite, or non-positive duration shows `?` and `Duration unavailable`. Both states clear the previous progress bar and omit the percentage. With a finite positive duration, the UI renders elapsed/total time and a 50-character bar, with the percentage clamped to 0–100 and non-finite elapsed values yielding 0%. `renderBar()` also bounds its input to a finite percentage before computing repeat counts.
 
-The displayed time is an estimate. VLC startup/buffering, wall-clock changes, exact-integer duration rounding, and terminal-size assumptions remain documented follow-up areas.
+The displayed time is an estimate. VLC startup/buffering, exact-integer duration rounding, and terminal-size assumptions remain documented follow-up areas.
 
 ### Keyboard input and shutdown
 
@@ -164,3 +165,5 @@ On **2026-11-15**, the missing `tests/test_library.py` suite was added to the re
 Later on **2026-11-15**, media eligibility filtering was added to both players for B12. The library suite passes **16 tests covering 30 native-process scenarios** and Python scanner checks, and `node --test tests/test_media.js` passes **10 JavaScript regressions**. The full Python suite passes **42 tests**. Coverage includes mixed and invalid-only libraries, case-insensitive extensions, readable file symlinks, broken/directory links, special files, unreadable entries, scan races, changing file types, safe advancement, and decoding failures without automatic retry. Syntax and whitespace checks also pass.
 
 On **2026-11-16**, metadata deadlines and metadata-independent status rendering were added for B18. `tests/test_metadata.js` passes **13 regressions**, including a real subprocess that ignores `SIGTERM` and is killed after five seconds while playback remains active. Coverage includes pending/known/unavailable duration, immediate pause/resume status, stale results/errors, track completion, and shutdown. The unknown-duration guard also resolves B14's division-by-zero display. All **23 JavaScript tests** and **42 Python/native tests** pass, along with JavaScript syntax checks. The Python suite used a canonical `/private/var/...` `TMPDIR` to avoid the existing library tests' macOS temporary-path alias mismatch.
+
+On **2026-11-17**, B16 was fixed with monotonic elapsed timing and finite progress bounds. All **6 progress regressions** pass, covering backward/forward wall-clock jumps, delayed ticks, pause/resume, tracking resets, inactive playback, and invalid progress inputs. The backward-clock test reproduces `RangeError` against the pre-fix code. All **26 currently available Python/native tests** and JavaScript syntax checks also pass.

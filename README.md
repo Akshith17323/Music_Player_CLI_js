@@ -39,7 +39,7 @@ The sorted song list refreshes on input and track completion. Selection follows 
 
 Input decoding handles batched keys and arrow sequences split across stdin chunks. Piped input also accepts a newline as Enter.
 
-Playback failures stop the current track and display an error; select another song with the controls above. Progress is a timer-based estimate.
+Playback failures stop the current track and display an error; select another song with the controls above. Progress is a timer-based estimate measured with a monotonic clock, so system-clock changes do not affect it.
 
 Playing/paused status and elapsed time appear immediately, even while duration is being looked up. Metadata lookups are limited to five seconds; an unresponsive `afinfo` is killed without stopping VLC. Pending or unavailable duration is shown as `?`, with no percentage or progress bar until a finite positive duration is available.
 
@@ -65,6 +65,8 @@ The tests use mocked streams, isolated libraries, and fake audio executables, so
 `tests/test_library.py` also checks missing, non-directory, and unreadable folders before startup and during input/completion refreshes, plus mixed and invalid-only libraries, supported extensions, symlinks, per-entry access failures, changing file types, and decoding errors. `tests/test_media.js` checks JavaScript filtering, selection, playback revalidation, automatic advancement, and decoding-error recovery with mocked files and child processes.
 
 `tests/test_metadata.js` checks immediate playback/pause status, unknown-duration rendering, stale metadata ownership, cancellation, and a real hung metadata subprocess timing out without interrupting playback.
+
+`tests/test_progress.js` checks backward/forward clock jumps, delayed ticks, pause/resume, tracking resets, and finite progress clamping with controlled clocks.
 
 Run just the library checks with `python3 -m unittest discover -s tests -p 'test_library.py' -v`.
 
@@ -138,7 +140,7 @@ State management is important: `cursor`, `playingSong`, `isPaused`, `totalDurati
    I'd start playing a 10-second song and wait exactly 3 seconds, then hit spacebar to pause. I'd wait 5 seconds in real-time, then hit spacebar again to resume. If it's correct, the audio will pick up exactly where it left off at 3 seconds, and the progress bar won't have moved at all during those 5 seconds it was paused. It should finish playing exactly 7 seconds after I resumed it.
 
 6. **How is the progress percentage calculated? What should happen to the progress value while the song is paused?**
-   The calculation is `(timeElapsed / totalDuration) * 100`, capped at 100 and used only for finite positive durations. `afinfo` supplies the duration asynchronously. Every 100ms, the timer measures a `Date.now()` delta and adds it only while a playback process exists and `isPaused` is false. While paused, elapsed time stays fixed. Unknown durations still show elapsed time but omit the percentage and bar. Backward clock changes still need better handling.
+   The calculation is `(timeElapsed / totalDuration) * 100`, clamped to 0–100 and used only for finite positive durations; non-finite elapsed values yield 0%. `afinfo` supplies the duration asynchronously. Every 100ms, the timer measures a monotonic `performance.now()` delta and adds it only while a playback process exists and `isPaused` is false. While paused, elapsed time stays fixed. Unknown durations still show elapsed time but omit the percentage and bar. System-clock changes do not affect elapsed time.
 
 7. **When the user starts a new song while another song is already playing, what needs to be stopped or cleaned up? What could happen if you do not do this?**
    `stopPlayback()` first invalidates the old player reference, clears the timer, resets playback state, and sends the old player `SIGKILL`. Completion and error callbacks check ownership before acting, so queued events from a replaced process cannot skip or interrupt the new song.

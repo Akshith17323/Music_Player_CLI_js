@@ -134,7 +134,7 @@ async function getSongDuration(songFilePath) {
                 return;
             }
             if (output.includes("estimated duration: ")) {
-                resolve(Number(output.split("estimated duration: ")[1].split(".")[0]) + 1);
+                resolve(Number(output.split("estimated duration: ")[1].split(" sec")[0]));
             } else {
                 resolve(0);
             }
@@ -172,7 +172,7 @@ function updateProgress() {
             ? Math.max(0, Math.min(100, ((timeElapsed / totalDuration) * 100).toFixed(2)))
             : 0;
         const bar = renderBar(percentagePlayed);
-        process.stdout.write(`\n\x1B[0K${Math.ceil(timeElapsed)} / ${totalDuration} || ${percentagePlayed} %`);
+        process.stdout.write(`\n\x1B[0K${Math.ceil(timeElapsed)} / ${Math.ceil(totalDuration)} || ${percentagePlayed} %`);
         process.stdout.write(`\n\x1B[0K${bar}\n`);
     }
 }

@@ -43,6 +43,8 @@ Playback failures stop the current track and display an error; select another so
 
 Playing/paused status and elapsed time appear immediately, even while duration is being looked up. Metadata lookups are limited to five seconds; an unresponsive `afinfo` is killed without stopping VLC. Pending or unavailable duration is shown as `?`, with no percentage or progress bar until a finite positive duration is available.
 
+Duration retains its fractional seconds for progress calculations; elapsed/total seconds are rounded up only for display.
+
 ### Python Prototype
 
 `python3 cli_player.py` runs the earlier `afplay` prototype. It supports clamped arrow navigation and Enter-to-play; pause, skip shortcuts, progress tracking, and automatic advancement belong to the JavaScript player. It stops `afplay` and restores the terminal on Ctrl+C, catchable termination signals, and error exits.
@@ -67,6 +69,8 @@ The tests use mocked streams, isolated libraries, and fake audio executables, so
 `tests/test_metadata.js` checks immediate playback/pause status, unknown-duration rendering, stale metadata ownership, cancellation, and a real hung metadata subprocess timing out without interrupting playback.
 
 `tests/test_progress.js` checks backward/forward clock jumps, delayed ticks, pause/resume, tracking resets, and finite progress clamping with controlled clocks.
+
+`tests/test_duration.js` checks exact-integer, fractional, and subsecond durations, display-only rounding, and unavailable metadata.
 
 Run just the library checks with `python3 -m unittest discover -s tests -p 'test_library.py' -v`.
 

@@ -1,6 +1,6 @@
 # CLI Music Player Architecture
 
-Verified against the current implementations on **2026-11-17**. Earlier architecture reviews are available in Git history.
+Verified against the current implementations on **2026-11-18**. Earlier architecture reviews are available in Git history.
 
 ## Repository layout
 
@@ -15,6 +15,7 @@ Verified against the current implementations on **2026-11-17**. Earlier architec
 | `tests/test_media.js` | JavaScript media-filtering, playback-selection, advancement, and decoding-error regressions with mocked files and child processes. |
 | `tests/test_metadata.js` | Metadata timeout, playback-status, unknown-duration, and ownership regressions, including a real hung subprocess. |
 | `tests/test_progress.js` | Controlled-clock regressions for elapsed tracking, pause/resume, resets, and bounded progress rendering. |
+| `tests/test_duration.js` | Full-precision duration parsing, display-only rounding, and unavailable-metadata regressions. |
 | `songs/` | Fixed library directory adjacent to the entry points. |
 | `README.md` | Setup, controls, and learning notes. |
 | `ARCHITECTURE.md` | Current runtime design and verification. |
@@ -103,11 +104,13 @@ Python catches `afplay` launch failures, clears the failed playback state, displ
 
 `getSongDuration()` runs asynchronously after VLC has been spawned. Playback does not wait for metadata. The `afinfo` child uses Node's `spawn()` timeout of five seconds with `SIGKILL`, so a hung lookup is terminated without stopping VLC. Timed-out or unsuccessful lookups leave duration unavailable. Replacement and shutdown still kill owned metadata children. Results are applied only if the requesting player is still current.
 
+The full numeric duration before `sec` is retained for percentage calculations. Only the displayed elapsed/total seconds are rounded up with `Math.ceil()`, so an exact two-second track remains two seconds and reaches 100% at its reported endpoint.
+
 `startElapsedTracking()` runs a 100 ms interval. It measures monotonic `performance.now()` differences, unaffected by system-clock changes, and adds them while a player exists and the local pause flag is false. `updateProgress()` renders the current filename, playing/paused state, and elapsed time independently of metadata. It redraws immediately at playback start, on pause/resume, and when metadata arrives, as well as on timer ticks and menu refreshes.
 
 Pending duration shows `?` and `Looking up duration...`; failed, non-finite, or non-positive duration shows `?` and `Duration unavailable`. Both states clear the previous progress bar and omit the percentage. With a finite positive duration, the UI renders elapsed/total time and a 50-character bar, with the percentage clamped to 0–100 and non-finite elapsed values yielding 0%. `renderBar()` also bounds its input to a finite percentage before computing repeat counts.
 
-The displayed time is an estimate. VLC startup/buffering, exact-integer duration rounding, and terminal-size assumptions remain documented follow-up areas.
+The displayed time is an estimate. VLC startup/buffering and terminal-size assumptions remain documented follow-up areas.
 
 ### Keyboard input and shutdown
 
@@ -167,3 +170,5 @@ Later on **2026-11-15**, media eligibility filtering was added to both players f
 On **2026-11-16**, metadata deadlines and metadata-independent status rendering were added for B18. `tests/test_metadata.js` passes **13 regressions**, including a real subprocess that ignores `SIGTERM` and is killed after five seconds while playback remains active. Coverage includes pending/known/unavailable duration, immediate pause/resume status, stale results/errors, track completion, and shutdown. The unknown-duration guard also resolves B14's division-by-zero display. All **23 JavaScript tests** and **42 Python/native tests** pass, along with JavaScript syntax checks. The Python suite used a canonical `/private/var/...` `TMPDIR` to avoid the existing library tests' macOS temporary-path alias mismatch.
 
 On **2026-11-17**, B16 was fixed with monotonic elapsed timing and finite progress bounds. All **6 progress regressions** pass, covering backward/forward wall-clock jumps, delayed ticks, pause/resume, tracking resets, inactive playback, and invalid progress inputs. The backward-clock test reproduces `RangeError` against the pre-fix code. All **26 currently available Python/native tests** and JavaScript syntax checks also pass.
+
+On **2026-11-18**, B15 was fixed by retaining full duration precision and rounding only for display. All **5 duration regressions** and **26 currently available Python/native tests** pass, along with JavaScript syntax and whitespace checks. The exact-integer regression returns three seconds instead of two against the pre-fix parser. Real VLC audio playback was not exercised.

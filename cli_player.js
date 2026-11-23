@@ -153,8 +153,8 @@ function startElapsedTracking() {
         
         if (vlcPlayProcess !== undefined && !isPaused) {
             timeElapsed += delta;
+            updateProgress();
         }
-        updateProgress();
     }, 100);
     updateProgress();
 }
@@ -288,13 +288,14 @@ function playSong(targetCursor) {
             "--no-play-and-stop", "--no-play-and-pause", "--no-start-paused",
             "--no-quiet", "--verbose", "0", "--no-color",
             songFinalPath
-        ], { stdio: ['pipe', 'ignore', 'pipe'] }));
+        ], { stdio: ['pipe', 'pipe', 'pipe'] }));
     } catch (error) {
         stopPlayback();
         showPlaybackError(executableFailure('VLC', 'VLC_PATH', error).message);
         return;
     }
     vlcPlayProcess = currentProcess;
+    currentProcess.stdout.resume();
     startElapsedTracking();
 
     const handlePlayerError = (error) => {
@@ -304,6 +305,7 @@ function playSong(targetCursor) {
     };
     currentProcess.on('error', error => handlePlayerError(executableFailure('VLC', 'VLC_PATH', error)));
     currentProcess.stdin.on('error', handlePlayerError);
+    currentProcess.stdout.on('error', handlePlayerError);
     currentProcess.stderr.on('error', handlePlayerError);
 
     let diagnosticTail = "";
@@ -311,7 +313,9 @@ function playSong(targetCursor) {
     currentProcess.stderr.on('data', (data) => {
         const diagnostics = diagnosticTail + data.toString();
         // VLC can exit with code 0 even when opening/decoding the input failed.
-        if (/\b(?:input|stream|demux|decoder|audio output) error:/i.test(diagnostics)) {
+        // Filter out non-fatal stream pre-fill / demux probe warnings during pause/buffering.
+        const cleaned = diagnostics.replace(/\b(?:cache_read stream error: cannot pre fill buffer|mjpeg demux error: cannot peek)\b/gi, '');
+        if (/\b(?:input|stream|demux|decoder|audio output) error:/i.test(cleaned)) {
             playbackFailed = true;
         }
         diagnosticTail = diagnostics.slice(-4096);
@@ -466,7 +470,7 @@ function handleInput(_character, key) {
     }
 
     // play/pause 'p' or space
-    if (key.sequence === 'p' || key.sequence === ' ') {
+    if (key.sequence === 'p' || key.sequence === 'P' || key.sequence === ' ' || key.name === 'space') {
         if (vlcPlayProcess !== undefined && !vlcPlayProcess.stdin.destroyed) {
             const currentProcess = vlcPlayProcess;
             try {
@@ -480,6 +484,8 @@ function handleInput(_character, key) {
                 stopPlayback();
                 showPlaybackError(`VLC input: ${error.message}`);
             }
+        } else if (allSongs && allSongs.length > 0) {
+            playSong(cursor);
         }
     }
 }

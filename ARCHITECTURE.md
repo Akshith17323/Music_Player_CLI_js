@@ -91,7 +91,7 @@ The last track wraps to the first; a one-track library repeats that track. If th
 
 | Child | stdin | stdout | stderr |
 | --- | --- | --- | --- |
-| VLC | Pipe for RC pause commands. | Ignored. | Continuously consumed; a bounded diagnostic tail detects input/stream/demux/decoder/audio-output errors. |
+| VLC | Pipe for RC pause commands. | Piped and resumed so VLC RC output does not error on write. | Continuously consumed; a bounded diagnostic tail detects input/stream/demux/decoder/audio-output errors. |
 | `afinfo` | Ignored. | Collected for duration parsing. | Ignored. |
 
 VLC 3.0.24 can report an unreadable file and still exit with code zero. Recognized media-error diagnostics therefore block advancement, preventing an invalid single-track library from entering a retry loop. The Lua RC interface's normal `Interrupted` shutdown diagnostic is not treated as a media failure. This diagnostic classification is tied to VLC's log format and was verified with native playback checks.

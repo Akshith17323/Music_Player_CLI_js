@@ -5,7 +5,8 @@ const { spawn } = require("child_process");
 const { emitKeypressEvents } = require("readline");
 const { performance } = require("perf_hooks");
 
-const songDir = join(__dirname, 'songs');
+const customDir = process.env.SONGS_DIR || (process.argv[2] && !process.argv[2].startsWith('-') ? process.argv[2] : undefined);
+const songDir = customDir ? resolve(customDir) : join(__dirname, 'songs');
 const metadataTimeoutMs = 5000;
 const supportedAudioExtensions = new Set([
     '.mp3', '.m4a', '.aac', '.wav', '.aif', '.aiff',
@@ -13,6 +14,7 @@ const supportedAudioExtensions = new Set([
 ]);
 let allSongs = null;
 let cursor = 0;
+let visibleCount = 0;
 let isPaused = true;
 let vlcPlayProcess = undefined;
 
@@ -145,6 +147,7 @@ async function getSongDuration(songFilePath) {
 function startElapsedTracking() {
     timeElapsed = 0;
     let lastTickTime = performance.now();
+    let tickCount = 0;
     if (trackingInterval) clearInterval(trackingInterval);
     trackingInterval = setInterval(() => {
         const now = performance.now();
@@ -154,6 +157,14 @@ function startElapsedTracking() {
         if (vlcPlayProcess !== undefined && !isPaused) {
             timeElapsed += delta;
             updateProgress();
+            tickCount++;
+            if (tickCount % 10 === 0 && !vlcPlayProcess.stdin.destroyed) {
+                try {
+                    vlcPlayProcess.stdin.write('get_time\n');
+                } catch {
+                    // Ignored if process closed
+                }
+            }
         }
     }, 100);
     updateProgress();
@@ -161,7 +172,12 @@ function startElapsedTracking() {
 
 function updateProgress() {
     if (timeElapsed !== undefined && allSongs !== null && playingSong !== undefined) {
-        process.stdout.write(`\x1B[${allSongs.length + 2};1H\r\x1B[0K${isPaused ? 'Paused' : 'Playing'}: ${playingSong}`);
+        const termCols = process.stdout.columns || 80;
+        const maxTitleLen = Math.max(10, termCols - 12);
+        const displaySong = playingSong.length > maxTitleLen ? playingSong.slice(0, maxTitleLen - 3) + '...' : playingSong;
+        const statusRow = visibleCount + 2;
+
+        process.stdout.write(`\x1B[${statusRow};1H\r\x1B[0K${isPaused ? 'Paused' : 'Playing'}: ${displaySong}`);
         if (!Number.isFinite(totalDuration) || totalDuration <= 0) {
             const durationStatus = totalDuration === undefined ? 'Looking up duration...' : 'Duration unavailable';
             process.stdout.write(`\n\x1B[0K${Math.ceil(timeElapsed)} / ? || ${durationStatus}`);
@@ -179,8 +195,10 @@ function updateProgress() {
 
 function renderBar(percentagePlayed) {
     percentagePlayed = Number.isFinite(percentagePlayed) ? Math.max(0, Math.min(100, percentagePlayed)) : 0;
-    const playedCharC = Math.round(50 * (percentagePlayed) / 100);
-    const progressBar = "X".repeat(playedCharC) + ".".repeat(50 - playedCharC);
+    const termCols = process.stdout.columns || 80;
+    const barWidth = Math.max(10, Math.min(50, termCols - 10));
+    const playedCharC = Math.round(barWidth * (percentagePlayed) / 100);
+    const progressBar = "X".repeat(playedCharC) + ".".repeat(barWidth - playedCharC);
     return progressBar;
 }
 
@@ -231,11 +249,31 @@ function refreshSongsOrShutdown() {
 function listSongs() {
     process.stdout.write("\x1B[2;1H\x1B[0J");
 
-    if (allSongs.length === 0) {
+    if (!allSongs || allSongs.length === 0) {
+        visibleCount = 1;
         process.stdout.write("\r\x1B[0KNo songs found in the songs folder.\n");
     } else {
-        const menuText = allSongs.map((songName, index) => {
-            return ("\r\x1B[0K" + (index === cursor ? '> ' : '  ') + songName);
+        const termRows = process.stdout.rows || 24;
+        const termCols = process.stdout.columns || 80;
+        const maxMenuRows = Math.max(3, termRows - 7);
+        const maxTitleLen = Math.max(10, termCols - 6);
+
+        let start = 0;
+        let end = allSongs.length;
+        if (allSongs.length > maxMenuRows) {
+            const half = Math.floor(maxMenuRows / 2);
+            start = Math.max(0, Math.min(cursor - half, allSongs.length - maxMenuRows));
+            end = Math.min(allSongs.length, start + maxMenuRows);
+        }
+
+        const visibleSongs = allSongs.slice(start, end);
+        visibleCount = visibleSongs.length;
+
+        const menuText = visibleSongs.map((songName, relIndex) => {
+            const actualIndex = start + relIndex;
+            const prefix = actualIndex === cursor ? '> ' : '  ';
+            const truncated = songName.length > maxTitleLen ? songName.slice(0, maxTitleLen - 3) + '...' : songName;
+            return ("\r\x1B[0K" + prefix + truncated);
         }).join("\n");
 
         process.stdout.write(menuText + "\n");
@@ -250,6 +288,7 @@ function seekSong(seconds) {
         try {
             const prefix = seconds > 0 ? '+' : '';
             currentProcess.stdin.write(`seek ${prefix}${seconds}\n`);
+            currentProcess.stdin.write('get_time\n');
             if (timeElapsed !== undefined) {
                 const maxLimit = Number.isFinite(totalDuration) && totalDuration > 0 ? totalDuration : Infinity;
                 timeElapsed = Math.max(0, Math.min(maxLimit, timeElapsed + seconds));
@@ -275,7 +314,8 @@ function stopPlayback() {
 }
 
 function showPlaybackError(message) {
-    process.stdout.write(`\x1B[${allSongs.length + 2};1H\r\x1B[0JPlayback error: ${message}\n`);
+    const statusRow = visibleCount + 2;
+    process.stdout.write(`\x1B[${statusRow};1H\r\x1B[0JPlayback error: ${message}\n`);
 }
 
 function playSong(targetCursor) {
@@ -293,7 +333,7 @@ function playSong(targetCursor) {
     cursor = targetIndex;
     playingSong = songName;
     listSongs();
-    process.stdout.write(`\x1B[${allSongs.length + 2};1H\r\x1B[0J`);
+    process.stdout.write(`\x1B[${visibleCount + 2};1H\r\x1B[0J`);
 
     const songFinalPath = join(songDir, songName);
 
@@ -313,6 +353,24 @@ function playSong(targetCursor) {
         return;
     }
     vlcPlayProcess = currentProcess;
+    let stdoutBuffer = "";
+    currentProcess.stdout.on('data', (data) => {
+        stdoutBuffer += data.toString();
+        const lines = stdoutBuffer.split(/\r?\n/);
+        stdoutBuffer = lines.pop();
+        for (const line of lines) {
+            const clean = line.replace(/^>\s*/, '').trim();
+            if (/^\d+$/.test(clean)) {
+                const vlcSec = Number(clean);
+                if (vlcPlayProcess === currentProcess && timeElapsed !== undefined) {
+                    if (Math.abs(timeElapsed - vlcSec) >= 0.5) {
+                        timeElapsed = vlcSec;
+                        updateProgress();
+                    }
+                }
+            }
+        }
+    });
     currentProcess.stdout.resume();
     startElapsedTracking();
 
@@ -384,7 +442,14 @@ function skipSong(offset) {
     playSong(targetIndex);
 }
 
+function handleResize() {
+    if (!shutdownStarted && allSongs !== null) {
+        listSongs();
+    }
+}
+
 function restoreTerminal() {
+    process.stdout.removeListener('resize', handleResize);
     process.stdin.removeListener('keypress', handleInput);
     process.stdin.removeListener('end', handleInputEnd);
     process.stdin.removeListener('close', handleInputEnd);
@@ -507,6 +572,9 @@ function handleInput(_character, key) {
                 currentProcess.stdin.write('pause\n');
                 if (vlcPlayProcess === currentProcess) {
                     isPaused = !isPaused;
+                    if (!isPaused && !currentProcess.stdin.destroyed) {
+                        try { currentProcess.stdin.write('get_time\n'); } catch {}
+                    }
                     updateProgress();
                 }
             } catch (error) {
@@ -534,6 +602,9 @@ function main() {
 
     process.stdout.write('\x1b[2J');
     listSongs();
+    if (process.stdout.isTTY) {
+        process.stdout.on('resize', handleResize);
+    }
     if (process.stdin.isTTY) {
         previousStdinRawMode = Boolean(process.stdin.isRaw);
         process.stdin.setRawMode(true);

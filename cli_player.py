@@ -6,7 +6,8 @@ import shutil
 import sys
 import time
 
-SONGS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "songs")
+custom_dir = os.environ.get("SONGS_DIR") or (sys.argv[1] if len(sys.argv) > 1 and not sys.argv[1].startswith("-") else None)
+SONGS_DIR = os.path.abspath(custom_dir) if custom_dir else os.path.join(os.path.dirname(os.path.abspath(__file__)), "songs")
 SUPPORTED_AUDIO_EXTENSIONS = {
     '.mp3', '.m4a', '.aac', '.wav', '.aif', '.aiff',
     '.aifc', '.caf', '.flac', '.ogg', '.oga', '.opus',
@@ -124,16 +125,33 @@ def refreshSongs(directory_path, songs, user_selection_index):
 
 
 def listSongs(songs, user_selection_index=0, playing_song=None, playback_error=None):
+    terminal_size = shutil.get_terminal_size((80, 24))
+    cols = terminal_size.columns
+    lines = terminal_size.lines
+    max_menu_rows = max(3, lines - 6)
+    max_title_len = max(10, cols - 6)
+
     sys.stdout.write('\033[2J\033[H') # Clear screen
     if not songs:
         sys.stdout.write("No songs found in the songs folder.\r\n")
-    for ind, song in enumerate(songs):
-        if ind == user_selection_index:
-            sys.stdout.write(f"> {song}\r\n")
-        else:
-            sys.stdout.write(f"  {song}\r\n")
+    else:
+        start = 0
+        end = len(songs)
+        if len(songs) > max_menu_rows:
+            half = max_menu_rows // 2
+            start = max(0, min(user_selection_index - half, len(songs) - max_menu_rows))
+            end = min(len(songs), start + max_menu_rows)
+
+        visible_songs = songs[start:end]
+        for ind, song in enumerate(visible_songs):
+            actual_index = start + ind
+            prefix = "> " if actual_index == user_selection_index else "  "
+            display_name = song if len(song) <= max_title_len else song[:max_title_len - 3] + "..."
+            sys.stdout.write(f"{prefix}{display_name}\r\n")
+
     if playing_song:
-        sys.stdout.write(f"\r\nPlaying: {playing_song}\r\n")
+        trunc_playing = playing_song if len(playing_song) <= cols - 12 else playing_song[:cols - 15] + "..."
+        sys.stdout.write(f"\r\nPlaying: {trunc_playing}\r\n")
     if playback_error:
         sys.stdout.write(f"\r\nPlayback error: {playback_error}\r\n")
     sys.stdout.flush()

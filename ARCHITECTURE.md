@@ -6,17 +6,12 @@ Verified against the current implementations on **2026-11-18**. Earlier architec
 
 | Path | Purpose |
 | --- | --- |
-| `cli_player.js` | Main interactive player: keyboard input, playlist state, VLC lifecycle, metadata, and terminal rendering. |
-| `cli_player.py` | Earlier `afplay` prototype with arrow selection and Enter-to-play. |
-| `tests/test_input.js` | Input-decoding regression tests using mocked streams and child processes; runnable with Node's built-in test runner. |
+| `cli_player.js` | Main interactive player: keyboard input, playlist state, VLC lifecycle, metadata, viewport management, and terminal rendering. |
+| `cli_player.py` | Earlier `afplay` prototype with arrow selection, viewport management, and Enter-to-play. |
+| `tests/test_player.js` | JavaScript regression tests for progress rendering, seek bounds, viewport calculations, and format validations; runnable with `node --test`. |
 | `tests/test_python_input.py` | Python input-decoder checks with a deterministic clock and native pseudo-terminal regressions using fake `afplay`. |
 | `tests/test_shutdown.py` | Native-process shutdown regression tests for both players, using fake audio tools and pseudo-terminals. |
-| `tests/test_library.py` | Library-access regression tests, including startup validation and runtime child/terminal cleanup in both players. |
-| `tests/test_media.js` | JavaScript media-filtering, playback-selection, advancement, and decoding-error regressions with mocked files and child processes. |
-| `tests/test_metadata.js` | Metadata timeout, playback-status, unknown-duration, and ownership regressions, including a real hung subprocess. |
-| `tests/test_progress.js` | Controlled-clock regressions for elapsed tracking, pause/resume, resets, and bounded progress rendering. |
-| `tests/test_duration.js` | Full-precision duration parsing, display-only rounding, and unavailable-metadata regressions. |
-| `songs/` | Fixed library directory adjacent to the entry points. |
+| `songs/` | Default library directory adjacent to the entry points. |
 | `README.md` | Setup, controls, and learning notes. |
 | `ARCHITECTURE.md` | Current runtime design and verification. |
 | `CLI_Music_Player_Project_Report.pdf` | Historical coursework report. |
@@ -59,7 +54,7 @@ Both players read the library before initializing the UI. Missing, non-directory
 - If the active track leaves the library, it can finish playing; next/previous uses its filename's position in the refreshed sorted order.
 - Empty libraries show a message and disable playback/navigation arithmetic.
 
-There is no command-line library-path argument. The supported extension list is documented in the README. Scanning validates filenames, file type, and readability without decoding every file; a corrupt or mislabeled file with an accepted extension can still be listed, but playback failures are reported by the backend handlers rather than triggering automatic retries. Codec support depends on the backend and macOS version.
+A custom songs directory can be passed as a command-line argument or configured via `SONGS_DIR`; it defaults to `./songs`. The supported extension list is documented in the README. Viewports dynamically paginate large libraries based on terminal rows and truncate names to terminal width. Scanning validates filenames, file type, and readability without decoding every file; a corrupt or mislabeled file with an accepted extension can still be listed, but playback failures are reported by the backend handlers rather than triggering automatic retries. Codec support depends on the backend and macOS version.
 
 The Python prototype refreshes its directory listing before handling input and after playback completion. It preserves the selected filename when available, otherwise clamps the selection to the refreshed list, and skips playback requests when the list is empty. This also handles hidden-only libraries and a library becoming empty during use.
 

@@ -244,6 +244,24 @@ function listSongs() {
     updateProgress();
 }
 
+function seekSong(seconds) {
+    if (vlcPlayProcess !== undefined && !vlcPlayProcess.stdin.destroyed) {
+        const currentProcess = vlcPlayProcess;
+        try {
+            const prefix = seconds > 0 ? '+' : '';
+            currentProcess.stdin.write(`seek ${prefix}${seconds}\n`);
+            if (timeElapsed !== undefined) {
+                const maxLimit = Number.isFinite(totalDuration) && totalDuration > 0 ? totalDuration : Infinity;
+                timeElapsed = Math.max(0, Math.min(maxLimit, timeElapsed + seconds));
+                updateProgress();
+            }
+        } catch (error) {
+            if (vlcPlayProcess !== currentProcess) return;
+            showPlaybackError(`VLC seek: ${error.message}`);
+        }
+    }
+}
+
 function stopPlayback() {
     vlcPlayProcess = undefined;
     if (trackingInterval !== undefined) clearInterval(trackingInterval);
@@ -448,6 +466,18 @@ function handleInput(_character, key) {
             cursor = (cursor + 1) % allSongs.length;
         }
         listSongs();
+        return;
+    }
+
+    // Seek backward 5 seconds on Left Arrow
+    if (key.name === 'left') {
+        seekSong(-5);
+        return;
+    }
+
+    // Seek forward 5 seconds on Right Arrow
+    if (key.name === 'right') {
+        seekSong(5);
         return;
     }
 

@@ -75,7 +75,7 @@ The tests use mocked streams, isolated libraries, and fake audio executables, so
 
 Run just the library checks with `python3 -m unittest discover -s tests -p 'test_library.py' -v`.
 
-See [ARCHITECTURE.md](ARCHITECTURE.md), [docs/ARCHITECTURAL_CHOICES.md](docs/ARCHITECTURAL_CHOICES.md), and [docs/PROJECT_EXPLANATION.md](docs/PROJECT_EXPLANATION.md) for the current runtime design, architectural choices, comprehensive project explanation, and verified behavior. The [project PDF](CLI_Music_Player_Project_Report.pdf) and original diagram are historical development artifacts; earlier architecture reviews are available in Git history.
+See [ARCHITECTURE.md](ARCHITECTURE.md) for the current design, repository-root file roles, verified behavior, and known limitations. The [project PDF](CLI_Music_Player_Project_Report.pdf) and original diagram are historical development artifacts; earlier architecture reviews are available in Git history.
 
 ---
 

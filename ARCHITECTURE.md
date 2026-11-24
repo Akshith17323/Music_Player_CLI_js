@@ -19,8 +19,6 @@ Verified against the current implementations on **2026-11-18**. Earlier architec
 | `songs/` | Fixed library directory adjacent to the entry points. |
 | `README.md` | Setup, controls, and learning notes. |
 | `ARCHITECTURE.md` | Current runtime design and verification. |
-| `docs/ARCHITECTURAL_CHOICES.md` | In-depth engineering rationale, trade-offs, and architectural design choices. |
-| `docs/PROJECT_EXPLANATION.md` | Comprehensive end-to-end project guide and code walkthrough. |
 | `CLI_Music_Player_Project_Report.pdf` | Historical coursework report. |
 | `assets/Music_cli_player_Architecture.png` | Historical architecture illustration. |
 | `prompts/history.txt` | Development-prompt history. |
